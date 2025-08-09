@@ -160,3 +160,7 @@ cython_debug/
 *.temp
 .DS_Store
 Thumbs.db
+
+# Claude Code and Serena directories
+.serena/
+.claude/

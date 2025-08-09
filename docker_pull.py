@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Docker Image Puller - Pure Python CLI for pulling and saving Docker images
 Supports corporate proxies and authentication
@@ -9,16 +8,12 @@ import json
 import os
 import sys
 import tarfile
-import hashlib
 import argparse
 import tempfile
-import shutil
-import base64
 import urllib.request
 from urllib.request import urlopen, Request, ProxyHandler, build_opener, install_opener, HTTPRedirectHandler
 from urllib.parse import urlencode, urlparse
 from urllib.error import HTTPError
-from io import BytesIO
 import gzip
 from datetime import datetime
 import ssl
@@ -32,30 +27,26 @@ class DockerImagePuller:
         self.proxy_config = proxy_config or {}
         self.debug = debug
         
-        # Setup proxy if configured
         self.setup_proxy()
     
     def setup_proxy(self):
         """Configure proxy settings for urllib"""
         proxy_handlers = {}
         
-        # Check for proxy settings from config or environment
         http_proxy = self.proxy_config.get('http_proxy') or os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
         https_proxy = self.proxy_config.get('https_proxy') or os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
         no_proxy = self.proxy_config.get('no_proxy') or os.environ.get('NO_PROXY') or os.environ.get('no_proxy')
         
         if http_proxy or https_proxy:
-            print(f"Using proxy configuration:")
+            print("Using proxy configuration:")
             
             if http_proxy:
-                # Handle proxy authentication if provided
                 if self.proxy_config.get('proxy_auth'):
                     http_proxy = self.add_proxy_auth(http_proxy, self.proxy_config['proxy_auth'])
                 proxy_handlers['http'] = http_proxy
                 print(f"  HTTP Proxy: {self.sanitize_proxy_url(http_proxy)}")
             
             if https_proxy:
-                # Handle proxy authentication if provided
                 if self.proxy_config.get('proxy_auth'):
                     https_proxy = self.add_proxy_auth(https_proxy, self.proxy_config['proxy_auth'])
                 proxy_handlers['https'] = https_proxy
@@ -63,15 +54,12 @@ class DockerImagePuller:
             
             if no_proxy:
                 print(f"  No Proxy: {no_proxy}")
-                # Parse no_proxy list
                 self.no_proxy_list = [host.strip() for host in no_proxy.split(',')]
             else:
                 self.no_proxy_list = []
             
-            # Create proxy handler
             proxy_handler = ProxyHandler(proxy_handlers)
             
-            # Create a custom HTTPRedirectHandler that doesn't pass auth headers to redirects
             class NoAuthRedirectHandler(HTTPRedirectHandler):
                 def http_error_301(self, req, fp, code, msg, headers):
                     if 'Authorization' in req.headers:
@@ -93,9 +81,7 @@ class DockerImagePuller:
                         del req.headers['Authorization']
                     return super().http_error_307(req, fp, code, msg, headers)
             
-            # Create opener with proxy and custom redirect handler
             if self.proxy_config.get('insecure'):
-                # Create SSL context that doesn't verify certificates (for corporate proxies)
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
@@ -106,11 +92,9 @@ class DockerImagePuller:
             else:
                 opener = build_opener(proxy_handler, NoAuthRedirectHandler)
             
-            # Install the opener globally
             install_opener(opener)
             print()
         else:
-            # Even without proxy, install redirect handler
             class NoAuthRedirectHandler(HTTPRedirectHandler):
                 def http_error_301(self, req, fp, code, msg, headers):
                     if 'Authorization' in req.headers:
@@ -260,12 +244,11 @@ class DockerImagePuller:
         
         try:
             with self.make_request(url, headers) as response:
-                content_type = response.headers.get('Content-Type', '')
                 manifest_data = json.loads(response.read())
                 
                 # Check if this is a manifest list (multi-arch)
                 if 'manifests' in manifest_data:
-                    print(f"Multi-architecture image detected. Available platforms:")
+                    print("Multi-architecture image detected. Available platforms:")
                     
                     # List available platforms
                     valid_manifests = []
@@ -314,13 +297,13 @@ class DockerImagePuller:
                     if not selected_manifest and valid_manifests:
                         # If still no match but we have valid manifests, inform user
                         print(f"\nWarning: No exact match for {os_type}/{architecture}")
-                        print(f"Falling back to first available platform")
+                        print("Falling back to first available platform")
                         selected_manifest = valid_manifests[0]
                         platform = selected_manifest.get('platform', {})
                         print(f"Using: {platform.get('os')}/{platform.get('architecture')}")
                     
                     if not selected_manifest:
-                        print(f"Error: No valid manifest found")
+                        print("Error: No valid manifest found")
                         sys.exit(1)
                     
                     platform = selected_manifest.get('platform', {})
@@ -373,7 +356,7 @@ class DockerImagePuller:
                     error_body = e.read().decode('utf-8')
                     if error_body:
                         print(f"Error details: {error_body}")
-                except:
+                except (UnicodeDecodeError, AttributeError):
                     pass
             sys.exit(1)
         except Exception as e:
@@ -454,7 +437,7 @@ class DockerImagePuller:
                             bypass_proxy_for_cdn = True
                             if self.debug:
                                 print(f"[DEBUG] Will bypass proxy for CDN redirect: {location[:100]}...")
-            except:
+            except Exception:
                 # HEAD request failed, continue with GET
                 pass
             
@@ -520,8 +503,8 @@ class DockerImagePuller:
             if e.code == 401 and retry_with_new_token:
                 # Token might not have the right scope, get a new one
                 if self.debug:
-                    print(f"[DEBUG] Got 401, retrying with new token...")
-                print(f"  Authorization failed, getting new token...")
+                    print("[DEBUG] Got 401, retrying with new token...")
+                print("  Authorization failed, getting new token...")
                 new_token = self.get_auth_token(image_name)
                 return self.download_blob(image_name, digest, new_token, retry_with_new_token=False)
             
@@ -532,7 +515,7 @@ class DockerImagePuller:
                 error_body = e.read().decode('utf-8')
                 if error_body:
                     print(f"  Error details: {error_body[:500]}")
-            except:
+            except (UnicodeDecodeError, AttributeError):
                 pass
             
             if self.debug:
@@ -586,7 +569,6 @@ class DockerImagePuller:
             layer_files = []
             for i, layer_info in enumerate(layers):
                 layer_digest = layer_info["digest"].replace("sha256:", "")
-                layer_file = f"{layer_digest}/layer.tar"
                 layer_dir = os.path.join(tmpdir, layer_digest)
                 os.makedirs(layer_dir, exist_ok=True)
                 
@@ -597,7 +579,7 @@ class DockerImagePuller:
                 if layer_data[:2] == b'\x1f\x8b':  # gzip magic number
                     try:
                         layer_data = gzip.decompress(layer_data)
-                    except:
+                    except (OSError, gzip.BadGzipFile):
                         pass  # Not gzipped or error decompressing
                 
                 with open(layer_tar_path, 'wb') as f:
