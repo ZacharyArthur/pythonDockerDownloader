@@ -1,0 +1,921 @@
+#!/usr/bin/env python3
+"""
+Docker Image Puller - Pure Python CLI for pulling and saving Docker images
+Supports corporate proxies and authentication
+Usage: python docker_pull.py <image:tag> [--output <filename>] [--proxy <proxy>] [--proxy-auth <user:pass>]
+"""
+
+import json
+import os
+import sys
+import tarfile
+import hashlib
+import argparse
+import tempfile
+import shutil
+import base64
+import urllib.request
+from urllib.request import urlopen, Request, ProxyHandler, build_opener, install_opener, HTTPRedirectHandler
+from urllib.parse import urlencode, urlparse
+from urllib.error import HTTPError
+from io import BytesIO
+import gzip
+from datetime import datetime
+import ssl
+
+class DockerImagePuller:
+    def __init__(self, auth_token=None, proxy_config=None, debug=False):
+        self.registry_url = "https://registry-1.docker.io"
+        self.auth_url = "https://auth.docker.io"
+        self.auth_token = auth_token
+        self.headers = {}
+        self.proxy_config = proxy_config or {}
+        self.debug = debug
+        
+        # Setup proxy if configured
+        self.setup_proxy()
+    
+    def setup_proxy(self):
+        """Configure proxy settings for urllib"""
+        proxy_handlers = {}
+        
+        # Check for proxy settings from config or environment
+        http_proxy = self.proxy_config.get('http_proxy') or os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        https_proxy = self.proxy_config.get('https_proxy') or os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+        no_proxy = self.proxy_config.get('no_proxy') or os.environ.get('NO_PROXY') or os.environ.get('no_proxy')
+        
+        if http_proxy or https_proxy:
+            print(f"Using proxy configuration:")
+            
+            if http_proxy:
+                # Handle proxy authentication if provided
+                if self.proxy_config.get('proxy_auth'):
+                    http_proxy = self.add_proxy_auth(http_proxy, self.proxy_config['proxy_auth'])
+                proxy_handlers['http'] = http_proxy
+                print(f"  HTTP Proxy: {self.sanitize_proxy_url(http_proxy)}")
+            
+            if https_proxy:
+                # Handle proxy authentication if provided
+                if self.proxy_config.get('proxy_auth'):
+                    https_proxy = self.add_proxy_auth(https_proxy, self.proxy_config['proxy_auth'])
+                proxy_handlers['https'] = https_proxy
+                print(f"  HTTPS Proxy: {self.sanitize_proxy_url(https_proxy)}")
+            
+            if no_proxy:
+                print(f"  No Proxy: {no_proxy}")
+                # Parse no_proxy list
+                self.no_proxy_list = [host.strip() for host in no_proxy.split(',')]
+            else:
+                self.no_proxy_list = []
+            
+            # Create proxy handler
+            proxy_handler = ProxyHandler(proxy_handlers)
+            
+            # Create a custom HTTPRedirectHandler that doesn't pass auth headers to redirects
+            class NoAuthRedirectHandler(HTTPRedirectHandler):
+                def http_error_301(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_301(req, fp, code, msg, headers)
+                
+                def http_error_302(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_302(req, fp, code, msg, headers)
+                
+                def http_error_303(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_303(req, fp, code, msg, headers)
+                
+                def http_error_307(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_307(req, fp, code, msg, headers)
+            
+            # Create opener with proxy and custom redirect handler
+            if self.proxy_config.get('insecure'):
+                # Create SSL context that doesn't verify certificates (for corporate proxies)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                
+                https_handler = urllib.request.HTTPSHandler(context=ctx)
+                opener = build_opener(proxy_handler, https_handler, NoAuthRedirectHandler)
+                print("  SSL Verification: Disabled (insecure mode)")
+            else:
+                opener = build_opener(proxy_handler, NoAuthRedirectHandler)
+            
+            # Install the opener globally
+            install_opener(opener)
+            print()
+        else:
+            # Even without proxy, install redirect handler
+            class NoAuthRedirectHandler(HTTPRedirectHandler):
+                def http_error_301(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_301(req, fp, code, msg, headers)
+                
+                def http_error_302(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_302(req, fp, code, msg, headers)
+                
+                def http_error_303(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_303(req, fp, code, msg, headers)
+                
+                def http_error_307(self, req, fp, code, msg, headers):
+                    if 'Authorization' in req.headers:
+                        del req.headers['Authorization']
+                    return super().http_error_307(req, fp, code, msg, headers)
+            
+            if self.proxy_config.get('insecure'):
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                https_handler = urllib.request.HTTPSHandler(context=ctx)
+                opener = build_opener(https_handler, NoAuthRedirectHandler)
+            else:
+                opener = build_opener(NoAuthRedirectHandler)
+            
+            install_opener(opener)
+            self.no_proxy_list = []
+    
+    def add_proxy_auth(self, proxy_url, auth_string):
+        """Add authentication to proxy URL"""
+        if '@' in proxy_url:
+            # Auth already in URL
+            return proxy_url
+        
+        parsed = urlparse(proxy_url)
+        if ':' in auth_string:
+            username, password = auth_string.split(':', 1)
+        else:
+            print("Warning: Proxy auth should be in format username:password")
+            return proxy_url
+        
+        # Rebuild URL with auth
+        if parsed.port:
+            netloc = f"{username}:{password}@{parsed.hostname}:{parsed.port}"
+        else:
+            netloc = f"{username}:{password}@{parsed.hostname}"
+        
+        return f"{parsed.scheme}://{netloc}{parsed.path}"
+    
+    def sanitize_proxy_url(self, url):
+        """Remove credentials from proxy URL for display"""
+        parsed = urlparse(url)
+        if '@' in parsed.netloc:
+            # Remove credentials
+            _, host_part = parsed.netloc.split('@', 1)
+            return f"{parsed.scheme}://{host_part}"
+        return url
+    
+    def should_bypass_proxy(self, hostname):
+        """Check if hostname should bypass proxy"""
+        if not hasattr(self, 'no_proxy_list'):
+            return False
+        
+        for no_proxy_host in self.no_proxy_list:
+            if no_proxy_host == '*':
+                return True
+            elif no_proxy_host.startswith('.') and hostname.endswith(no_proxy_host):
+                return True
+            elif hostname == no_proxy_host or hostname.endswith('.' + no_proxy_host):
+                return True
+        
+        return False
+    
+    def make_request(self, url, headers=None):
+        """Make HTTP request with proxy handling"""
+        req_headers = headers or {}
+        
+        if self.debug:
+            print(f"[DEBUG] Request URL: {url}")
+            print(f"[DEBUG] Headers: {req_headers}")
+        
+        # Check if we should bypass proxy for this URL
+        parsed_url = urlparse(url)
+        if self.should_bypass_proxy(parsed_url.hostname):
+            if self.debug:
+                print(f"[DEBUG] Bypassing proxy for {parsed_url.hostname}")
+            # Temporarily disable proxy for this request
+            old_proxies = {}
+            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                if proxy_var in os.environ:
+                    old_proxies[proxy_var] = os.environ[proxy_var]
+                    del os.environ[proxy_var]
+            
+            try:
+                req = Request(url, headers=req_headers)
+                response = urlopen(req, timeout=30)
+                if self.debug:
+                    print(f"[DEBUG] Response code: {response.code}")
+                return response
+            finally:
+                # Restore proxy settings
+                for proxy_var, value in old_proxies.items():
+                    os.environ[proxy_var] = value
+        else:
+            req = Request(url, headers=req_headers)
+            response = urlopen(req, timeout=30)
+            if self.debug:
+                print(f"[DEBUG] Response code: {response.code}")
+            return response
+    
+    def get_auth_token(self, image_name):
+        """Get authentication token for Docker Hub"""
+        if self.auth_token:
+            return self.auth_token
+            
+        scope = f"repository:{image_name}:pull"
+        params = {
+            "service": "registry.docker.io",
+            "scope": scope
+        }
+        
+        url = f"{self.auth_url}/token?{urlencode(params)}"
+        
+        try:
+            with self.make_request(url) as response:
+                data = json.loads(response.read())
+                return data.get("token")
+        except Exception as e:
+            print(f"Error getting auth token: {e}")
+            print("If behind a corporate proxy, ensure proxy settings are configured correctly")
+            sys.exit(1)
+    
+    def get_manifest(self, image_name, tag, token, architecture="amd64", os_type="linux"):
+        """Get image manifest from registry, handling multi-arch manifest lists"""
+        url = f"{self.registry_url}/v2/{image_name}/manifests/{tag}"
+        
+        # First, try to get manifest list (for multi-arch images)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json"
+        }
+        
+        try:
+            with self.make_request(url, headers) as response:
+                content_type = response.headers.get('Content-Type', '')
+                manifest_data = json.loads(response.read())
+                
+                # Check if this is a manifest list (multi-arch)
+                if 'manifests' in manifest_data:
+                    print(f"Multi-architecture image detected. Available platforms:")
+                    
+                    # List available platforms
+                    valid_manifests = []
+                    for m in manifest_data['manifests']:
+                        platform = m.get('platform', {})
+                        arch = platform.get('architecture', 'unknown')
+                        os = platform.get('os', 'unknown')
+                        variant = platform.get('variant', '')
+                        
+                        # Skip invalid entries
+                        if arch == 'unknown' or os == 'unknown':
+                            continue
+                            
+                        valid_manifests.append(m)
+                        variant_str = f"-{variant}" if variant else ""
+                        print(f"  - {os}/{arch}{variant_str}")
+                    
+                    # Find matching manifest for requested architecture
+                    selected_manifest = None
+                    
+                    # First try exact match
+                    for m in valid_manifests:
+                        platform = m.get('platform', {})
+                        if (platform.get('architecture') == architecture and 
+                            platform.get('os') == os_type):
+                            selected_manifest = m
+                            break
+                    
+                    # If no exact match and looking for arm, try variants
+                    if not selected_manifest and architecture in ['arm', 'arm64']:
+                        for m in valid_manifests:
+                            platform = m.get('platform', {})
+                            p_arch = platform.get('architecture', '')
+                            p_os = platform.get('os', '')
+                            p_variant = platform.get('variant', '')
+                            
+                            # Match arm variants
+                            if p_os == os_type:
+                                if architecture == 'arm64' and (p_arch == 'arm64' or (p_arch == 'arm' and p_variant == 'v8')):
+                                    selected_manifest = m
+                                    break
+                                elif architecture == 'arm' and p_arch == 'arm':
+                                    selected_manifest = m
+                                    break
+                    
+                    if not selected_manifest and valid_manifests:
+                        # If still no match but we have valid manifests, inform user
+                        print(f"\nWarning: No exact match for {os_type}/{architecture}")
+                        print(f"Falling back to first available platform")
+                        selected_manifest = valid_manifests[0]
+                        platform = selected_manifest.get('platform', {})
+                        print(f"Using: {platform.get('os')}/{platform.get('architecture')}")
+                    
+                    if not selected_manifest:
+                        print(f"Error: No valid manifest found")
+                        sys.exit(1)
+                    
+                    platform = selected_manifest.get('platform', {})
+                    print(f"Selected platform: {platform.get('os')}/{platform.get('architecture')}")
+                    
+                    # Now fetch the specific manifest using its digest
+                    specific_digest = selected_manifest['digest']
+                    url = f"{self.registry_url}/v2/{image_name}/manifests/{specific_digest}"
+                    
+                    headers = {
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json"
+                    }
+                    
+                    with self.make_request(url, headers) as response:
+                        specific_manifest = json.loads(response.read())
+                        
+                        # Check if we got an OCI manifest and convert if needed
+                        if 'mediaType' in specific_manifest and 'oci' in specific_manifest.get('mediaType', ''):
+                            print("  (OCI format image)")
+                        
+                        return specific_manifest
+                
+                # It's already a regular manifest
+                elif 'config' in manifest_data:
+                    return manifest_data
+                
+                # OCI format manifest
+                elif 'mediaType' in manifest_data:
+                    return manifest_data
+                
+                # Older schema v1 manifest (deprecated but might still exist)
+                elif 'schemaVersion' in manifest_data and manifest_data['schemaVersion'] == 1:
+                    print("Warning: Image uses deprecated manifest schema v1")
+                    print("This format is not fully supported. Image may not load correctly.")
+                    # Try to convert v1 to v2-like structure
+                    return self.convert_schema_v1(manifest_data)
+                
+                else:
+                    print(f"Unknown manifest format. Keys found: {list(manifest_data.keys())}")
+                    print("Manifest content:", json.dumps(manifest_data, indent=2)[:500])
+                    sys.exit(1)
+                    
+        except HTTPError as e:
+            if e.code == 404:
+                print(f"Image {image_name}:{tag} not found")
+            else:
+                print(f"Error getting manifest: {e}")
+                try:
+                    error_body = e.read().decode('utf-8')
+                    if error_body:
+                        print(f"Error details: {error_body}")
+                except:
+                    pass
+            sys.exit(1)
+        except Exception as e:
+            print(f"Unexpected error getting manifest: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    
+    def convert_schema_v1(self, v1_manifest):
+        """Attempt to convert schema v1 manifest to v2-like structure"""
+        # This is a best-effort conversion as v1 is quite different
+        print("Attempting to convert v1 manifest (compatibility mode)...")
+        
+        # Extract layer digests from v1 fsLayers
+        layers = []
+        if 'fsLayers' in v1_manifest:
+            for fs_layer in v1_manifest['fsLayers']:
+                layers.append({
+                    'digest': fs_layer.get('blobSum', ''),
+                    'size': 0,  # v1 doesn't include size
+                    'mediaType': 'application/vnd.docker.image.rootfs.diff.tar.gzip'
+                })
+        
+        # Create a minimal v2-like structure
+        # Note: v1 doesn't have a separate config blob
+        return {
+            'schemaVersion': 2,
+            'config': {
+                'digest': 'sha256:' + '0' * 64,  # Placeholder
+                'size': 0,
+                'mediaType': 'application/vnd.docker.container.image.v1+json'
+            },
+            'layers': layers
+        }
+    
+    def download_blob(self, image_name, digest, token, retry_with_new_token=True):
+        """Download a blob (layer) from registry"""
+        url = f"{self.registry_url}/v2/{image_name}/blobs/{digest}"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.docker.image.rootfs.diff.tar.gzip,application/octet-stream,*/*"
+        }
+        
+        try:
+            # Make the request - redirects will be handled automatically
+            # and auth headers will be stripped by our custom redirect handler
+            req = Request(url, headers=headers)
+            
+            if self.debug:
+                print(f"[DEBUG] Downloading blob from: {url}")
+            
+            # For blob downloads, temporarily bypass proxy for CDN URLs
+            # Save current proxy settings
+            old_proxies = {}
+            bypass_proxy_for_cdn = False
+            
+            try:
+                # First, make a HEAD request to see if we'll be redirected to a CDN
+                head_req = Request(url, headers=headers)
+                head_req.get_method = lambda: 'HEAD'
+                
+                try:
+                    with urlopen(head_req, timeout=30) as head_response:
+                        # Check if we got redirected to a CDN
+                        final_url = head_response.geturl()
+                        if final_url != url:
+                            # We got redirected, check if it's to S3/CDN
+                            if 'amazonaws.com' in final_url or 'cloudfront.net' in final_url:
+                                bypass_proxy_for_cdn = True
+                                if self.debug:
+                                    print(f"[DEBUG] Will bypass proxy for CDN URL: {final_url[:100]}...")
+                except HTTPError as e:
+                    # If we get a redirect status, extract the Location header
+                    if e.code in [301, 302, 303, 307, 308]:
+                        location = e.headers.get('Location', '')
+                        if 'amazonaws.com' in location or 'cloudfront.net' in location:
+                            bypass_proxy_for_cdn = True
+                            if self.debug:
+                                print(f"[DEBUG] Will bypass proxy for CDN redirect: {location[:100]}...")
+            except:
+                # HEAD request failed, continue with GET
+                pass
+            
+            # If we need to bypass proxy for CDN, temporarily disable it
+            if bypass_proxy_for_cdn:
+                for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                    if proxy_var in os.environ:
+                        old_proxies[proxy_var] = os.environ[proxy_var]
+                        del os.environ[proxy_var]
+                
+                # Reinstall opener without proxy
+                if self.proxy_config.get('insecure'):
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    https_handler = urllib.request.HTTPSHandler(context=ctx)
+                    opener = build_opener(https_handler)
+                else:
+                    opener = build_opener()
+                install_opener(opener)
+                
+                if self.debug:
+                    print("[DEBUG] Temporarily disabled proxy for CDN download")
+            
+            # Now make the actual download request
+            with urlopen(req, timeout=120) as response:
+                # Check if we got redirected
+                final_url = response.geturl()
+                if final_url != url and self.debug:
+                    print(f"[DEBUG] Followed redirect to: {final_url[:100]}...")
+                
+                # Get content length if available
+                content_length = response.headers.get('Content-Length')
+                expected_size = int(content_length) if content_length else None
+                
+                # Read in chunks for large files
+                chunks = []
+                total_size = 0
+                chunk_size = 65536  # 64KB chunks
+                
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total_size += len(chunk)
+                    
+                    # Show progress for large downloads
+                    if expected_size and expected_size > 1024 * 1024:  # Over 1MB
+                        progress = (total_size / expected_size) * 100
+                        mb_downloaded = total_size / (1024 * 1024)
+                        mb_total = expected_size / (1024 * 1024)
+                        print(f"  Downloaded {mb_downloaded:.1f}/{mb_total:.1f} MB ({progress:.1f}%)", end='\r')
+                    elif total_size > 1024 * 1024:  # Over 1MB but no size info
+                        print(f"  Downloaded {total_size // (1024*1024)} MB...", end='\r')
+                
+                if total_size > 1024 * 1024:
+                    print()  # New line after progress
+                
+                return b''.join(chunks)
+                
+        except HTTPError as e:
+            if e.code == 401 and retry_with_new_token:
+                # Token might not have the right scope, get a new one
+                if self.debug:
+                    print(f"[DEBUG] Got 401, retrying with new token...")
+                print(f"  Authorization failed, getting new token...")
+                new_token = self.get_auth_token(image_name)
+                return self.download_blob(image_name, digest, new_token, retry_with_new_token=False)
+            
+            print(f"Error downloading blob {digest}: HTTP {e.code} - {e.reason}")
+            
+            # Print response body for debugging
+            try:
+                error_body = e.read().decode('utf-8')
+                if error_body:
+                    print(f"  Error details: {error_body[:500]}")
+            except:
+                pass
+            
+            if self.debug:
+                print(f"[DEBUG] Request headers were: {headers}")
+                
+            return None
+            
+        except Exception as e:
+            print(f"Error downloading blob {digest}: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            return None
+            
+        finally:
+            # Restore proxy settings if we bypassed them
+            if bypass_proxy_for_cdn and old_proxies:
+                for proxy_var, value in old_proxies.items():
+                    os.environ[proxy_var] = value
+                
+                # Reinstall the original opener with proxy
+                self.setup_proxy()
+                
+                if self.debug:
+                    print("[DEBUG] Restored proxy settings")
+    
+    def create_docker_tar(self, image_name, tag, manifest, config_blob, layers, output_file):
+        """Create a Docker-compatible tar file"""
+        
+        # Parse image name for repository
+        if '/' in image_name:
+            namespace, repo = image_name.split('/', 1)
+        else:
+            namespace = "library"
+            repo = image_name
+        
+        full_image_name = f"{namespace}/{repo}"
+        
+        # Create temporary directory for building tar
+        with tempfile.TemporaryDirectory() as tmpdir:
+            
+            # Save config JSON
+            config_digest = manifest["config"]["digest"].replace("sha256:", "")
+            config_file = f"{config_digest}.json"
+            config_path = os.path.join(tmpdir, config_file)
+            
+            with open(config_path, 'wb') as f:
+                f.write(config_blob)
+            
+            # Save layers
+            layer_files = []
+            for i, layer_info in enumerate(layers):
+                layer_digest = layer_info["digest"].replace("sha256:", "")
+                layer_file = f"{layer_digest}/layer.tar"
+                layer_dir = os.path.join(tmpdir, layer_digest)
+                os.makedirs(layer_dir, exist_ok=True)
+                
+                layer_tar_path = os.path.join(layer_dir, "layer.tar")
+                
+                # Check if layer data is gzipped and decompress if needed
+                layer_data = layer_info["data"]
+                if layer_data[:2] == b'\x1f\x8b':  # gzip magic number
+                    try:
+                        layer_data = gzip.decompress(layer_data)
+                    except:
+                        pass  # Not gzipped or error decompressing
+                
+                with open(layer_tar_path, 'wb') as f:
+                    f.write(layer_data)
+                
+                # Create VERSION file
+                version_path = os.path.join(layer_dir, "VERSION")
+                with open(version_path, 'w') as f:
+                    f.write("1.0")
+                
+                # Create layer.json
+                layer_json_path = os.path.join(layer_dir, "json")
+                layer_json = {
+                    "id": layer_digest,
+                    "created": datetime.utcnow().isoformat() + "Z",
+                    "container_config": {
+                        "Hostname": "",
+                        "Domainname": "",
+                        "User": "",
+                        "AttachStdin": False,
+                        "AttachStdout": False,
+                        "AttachStderr": False,
+                        "Tty": False,
+                        "OpenStdin": False,
+                        "StdinOnce": False,
+                        "Env": None,
+                        "Cmd": None,
+                        "Image": "",
+                        "Volumes": None,
+                        "WorkingDir": "",
+                        "Entrypoint": None,
+                        "OnBuild": None,
+                        "Labels": None
+                    }
+                }
+                
+                with open(layer_json_path, 'w') as f:
+                    json.dump(layer_json, f)
+                
+                layer_files.append(layer_digest)
+            
+            # Create manifest.json
+            manifest_json = [{
+                "Config": config_file,
+                "RepoTags": [f"{full_image_name}:{tag}"],
+                "Layers": [f"{lf}/layer.tar" for lf in layer_files]
+            }]
+            
+            manifest_path = os.path.join(tmpdir, "manifest.json")
+            with open(manifest_path, 'w') as f:
+                json.dump(manifest_json, f)
+            
+            # Create repositories file
+            repositories = {
+                full_image_name: {
+                    tag: layer_files[-1] if layer_files else ""
+                }
+            }
+            
+            repositories_path = os.path.join(tmpdir, "repositories")
+            with open(repositories_path, 'w') as f:
+                json.dump(repositories, f)
+            
+            # Create the tar file
+            with tarfile.open(output_file, 'w') as tar:
+                # Add manifest.json
+                tar.add(manifest_path, arcname="manifest.json")
+                
+                # Add config
+                tar.add(config_path, arcname=config_file)
+                
+                # Add repositories
+                tar.add(repositories_path, arcname="repositories")
+                
+                # Add each layer directory
+                for layer_digest in layer_files:
+                    layer_dir = os.path.join(tmpdir, layer_digest)
+                    for root, dirs, files in os.walk(layer_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, tmpdir)
+                            tar.add(file_path, arcname=arcname)
+    
+    def pull_image(self, image_spec, output_file=None, architecture="amd64", os_type="linux"):
+        """Pull a Docker image and save as tar"""
+        
+        # Parse image specification
+        if ':' in image_spec:
+            image_name, tag = image_spec.rsplit(':', 1)
+        else:
+            image_name = image_spec
+            tag = "latest"
+        
+        # Handle official images (prepend library/)
+        if '/' not in image_name:
+            full_image_name = f"library/{image_name}"
+        else:
+            full_image_name = image_name
+        
+        if not output_file:
+            safe_name = image_name.replace('/', '_')
+            output_file = f"{safe_name}_{tag}.tar"
+        
+        print(f"Pulling {full_image_name}:{tag}...")
+        
+        # Get auth token
+        token = self.get_auth_token(full_image_name)
+        
+        # Get manifest
+        print("Fetching manifest...")
+        manifest = self.get_manifest(full_image_name, tag, token, architecture, os_type)
+        
+        # Download config
+        print("Downloading config...")
+        config_digest = manifest.get("config", {}).get("digest")
+        if not config_digest:
+            print("Error: No config digest found in manifest")
+            print("Manifest structure:", json.dumps(manifest, indent=2)[:500])
+            sys.exit(1)
+        
+        config_blob = self.download_blob(full_image_name, config_digest, token)
+        
+        if not config_blob:
+            print("Failed to download config")
+            sys.exit(1)
+        
+        # Download layers
+        layers = []
+        total_layers = len(manifest.get("layers", []))
+        
+        if total_layers == 0:
+            print("Warning: No layers found in manifest")
+            print("Manifest structure:", json.dumps(manifest, indent=2)[:500])
+        
+        for i, layer in enumerate(manifest.get("layers", [])):
+            digest = layer.get("digest")
+            size = layer.get("size", 0)
+            
+            if not digest:
+                print(f"Warning: Layer {i+1} has no digest, skipping...")
+                continue
+            
+            size_str = f"{size:,} bytes" if size else "unknown size"
+            print(f"Downloading layer {i+1}/{total_layers} ({digest[:12]}... {size_str})")
+            
+            blob_data = self.download_blob(full_image_name, digest, token)
+            
+            if not blob_data:
+                print(f"Failed to download layer {digest}")
+                print("Continuing with other layers...")
+                continue
+            
+            layers.append({
+                "digest": digest,
+                "size": size,
+                "data": blob_data
+            })
+        
+        if not layers:
+            print("Error: No layers were successfully downloaded")
+            sys.exit(1)
+        
+        # Create Docker tar
+        print(f"Creating tar file: {output_file}")
+        self.create_docker_tar(full_image_name, tag, manifest, config_blob, layers, output_file)
+        
+        # Calculate final size
+        file_size = os.path.getsize(output_file)
+        print(f"Successfully created {output_file} (size: {file_size:,} bytes)")
+        print(f"\nTo load this image, run: docker load -i {output_file}")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Pull Docker images from Docker Hub and save as tar files (with proxy support)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Environment Variables:
+  HTTP_PROXY / http_proxy     - HTTP proxy URL
+  HTTPS_PROXY / https_proxy   - HTTPS proxy URL  
+  NO_PROXY / no_proxy         - Comma-separated list of hosts to bypass proxy
+
+Examples:
+  %(prog)s ubuntu:20.04
+  %(prog)s alpine --output alpine-latest.tar
+  
+  # Pull ARM64 image
+  %(prog)s ubuntu:latest --arch arm64
+  
+  # With proxy
+  %(prog)s nginx:latest --proxy http://proxy.company.com:8080
+  
+  # With proxy authentication
+  %(prog)s alpine --proxy http://proxy.company.com:8080 --proxy-auth username:password
+  
+  # Using environment variables
+  export HTTPS_PROXY=http://proxy.company.com:8080
+  export NO_PROXY=localhost,127.0.0.1,.local
+  %(prog)s ubuntu:latest
+  
+  # Disable SSL verification for corporate proxies
+  %(prog)s nginx --proxy https://proxy.company.com:8080 --insecure
+        """
+    )
+    
+    parser.add_argument(
+        "image",
+        help="Docker image to pull (e.g., ubuntu:20.04, alpine, nginx:latest)"
+    )
+    
+    parser.add_argument(
+        "-o", "--output",
+        help="Output tar filename (default: imagename_tag.tar)",
+        default=None
+    )
+    
+    parser.add_argument(
+        "-t", "--token",
+        help="Docker Hub authentication token (for private repositories)",
+        default=None
+    )
+    
+    # Architecture and OS arguments
+    parser.add_argument(
+        "--arch", "--architecture",
+        help="Target architecture (default: amd64)",
+        default="amd64",
+        choices=["amd64", "arm64", "arm", "386", "ppc64le", "s390x", "mips64le", "riscv64"]
+    )
+    
+    parser.add_argument(
+        "--os",
+        help="Target operating system (default: linux)",
+        default="linux",
+        choices=["linux", "windows"]
+    )
+    
+    # Proxy arguments
+    parser.add_argument(
+        "-p", "--proxy",
+        help="Proxy URL (e.g., http://proxy.company.com:8080)",
+        default=None
+    )
+    
+    parser.add_argument(
+        "--proxy-auth",
+        help="Proxy authentication in format username:password",
+        default=None
+    )
+    
+    parser.add_argument(
+        "--http-proxy",
+        help="HTTP proxy URL (overrides environment variable)",
+        default=None
+    )
+    
+    parser.add_argument(
+        "--https-proxy", 
+        help="HTTPS proxy URL (overrides environment variable)",
+        default=None
+    )
+    
+    parser.add_argument(
+        "--no-proxy",
+        help="Comma-separated list of hosts to bypass proxy",
+        default=None
+    )
+    
+    parser.add_argument(
+        "-k", "--insecure",
+        action="store_true",
+        help="Disable SSL certificate verification (useful for corporate proxies)"
+    )
+    
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output for troubleshooting"
+    )
+    
+    args = parser.parse_args()
+    
+    # Build proxy configuration
+    proxy_config = {}
+    
+    # Handle simplified --proxy argument
+    if args.proxy:
+        proxy_config['http_proxy'] = args.proxy
+        proxy_config['https_proxy'] = args.proxy
+    
+    # Handle specific proxy settings
+    if args.http_proxy:
+        proxy_config['http_proxy'] = args.http_proxy
+    
+    if args.https_proxy:
+        proxy_config['https_proxy'] = args.https_proxy
+    
+    if args.no_proxy:
+        proxy_config['no_proxy'] = args.no_proxy
+    
+    if args.proxy_auth:
+        proxy_config['proxy_auth'] = args.proxy_auth
+    
+    if args.insecure:
+        proxy_config['insecure'] = True
+    
+    # Create puller instance
+    puller = DockerImagePuller(auth_token=args.token, proxy_config=proxy_config, debug=args.debug)
+    
+    try:
+        puller.pull_image(args.image, args.output, architecture=args.arch, os_type=args.os)
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
