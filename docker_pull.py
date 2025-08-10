@@ -52,7 +52,17 @@ class Config:
         self._validate_config()
 
     def _validate_proxy_config(self, proxy_config):
-        """Validate and normalize proxy configuration"""
+        """Validate and normalize proxy configuration.
+        
+        Merges provided proxy settings with environment variables.
+        Environment variables are used as fallback when not explicitly provided.
+        
+        Args:
+            proxy_config (dict): User-provided proxy configuration
+            
+        Returns:
+            dict: Validated and normalized proxy configuration
+        """
         # Add proxy configuration from environment if not provided
         if not proxy_config.get("http_proxy"):
             proxy_config["http_proxy"] = os.environ.get("HTTP_PROXY") or os.environ.get(
@@ -207,7 +217,15 @@ class ProxyManager:
         install_opener(opener)
 
     def _add_proxy_auth(self, proxy_url, auth_string):
-        """Add authentication to proxy URL"""
+        """Add authentication credentials to proxy URL.
+        
+        Args:
+            proxy_url (str): Base proxy URL
+            auth_string (str): Authentication in format "username:password"
+            
+        Returns:
+            str: Proxy URL with embedded authentication credentials
+        """
         if "@" in proxy_url:
             return proxy_url
 
@@ -340,7 +358,22 @@ class DockerImagePuller:
         return self.proxy_manager.sanitize_debug_output(text)
 
     def _stream_download(self, response, digest, expected_size=None):
-        """Stream download with progress tracking and memory efficiency"""
+        """Stream download with progress tracking and memory efficiency.
+        
+        Downloads large blobs using streaming to avoid memory issues.
+        Includes progress reporting for large files and timeout handling.
+        
+        Args:
+            response: HTTP response object to stream from
+            digest (str): Blob digest for identification in error messages
+            expected_size (int, optional): Expected download size in bytes
+            
+        Returns:
+            bytes: Downloaded data, or None if download failed
+            
+        Raises:
+            TimeoutError: If download stalls or chunk timeout exceeded
+        """
         import signal
         import time
 
@@ -682,7 +715,23 @@ class DockerImagePuller:
         }
 
     def download_blob(self, image_name, digest, token, retry_with_new_token=True):
-        """Download a blob (layer) from registry"""
+        """Download a blob (layer) from Docker registry.
+        
+        Handles authentication, redirects, and CDN optimization.
+        Automatically retries with fresh token on 401 errors.
+        
+        Args:
+            image_name (str): Repository name (e.g., 'library/alpine')
+            digest (str): SHA256 digest of the blob to download
+            token (str): Bearer token for authentication
+            retry_with_new_token (bool): Retry once with fresh token on 401
+            
+        Returns:
+            bytes: Blob data, or None if download failed
+            
+        Raises:
+            Various network and HTTP errors are caught and logged
+        """
         url = f"{self.registry_url}/v2/{image_name}/blobs/{digest}"
 
         headers = {
@@ -837,7 +886,26 @@ class DockerImagePuller:
     def create_docker_tar(
         self, image_name, tag, manifest, config_blob, layers, output_file
     ):
-        """Create a Docker-compatible tar file"""
+        """Create a Docker-compatible tar file from downloaded components.
+        
+        Assembles the manifest, config, and layers into a standard Docker tar
+        format that can be loaded with 'docker load'.
+        
+        Args:
+            image_name (str): Full image name (e.g., 'library/alpine')
+            tag (str): Image tag (e.g., 'latest')
+            manifest (dict): Image manifest metadata
+            config_blob (bytes): Image configuration blob
+            layers (list): List of layer dictionaries with digest, size, data
+            output_file (str): Path where to save the tar file
+            
+        Creates:
+            A tar file containing:
+            - manifest.json: Docker format manifest
+            - {config_digest}.json: Image configuration
+            - repositories: Repository tags mapping
+            - {layer_digest}/: Layer directories with layer.tar, json, VERSION
+        """
 
         # Parse image name for repository
         if "/" in image_name:
