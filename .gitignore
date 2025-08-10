@@ -161,6 +161,9 @@ cython_debug/
 .DS_Store
 Thumbs.db
 
+# Development configuration files
+CLAUDE.md
+
 # Claude Code and Serena directories
 .serena/
 .claude/
