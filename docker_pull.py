@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import re
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -274,8 +275,6 @@ class ProxyManager:
 
     def _mask_credentials_fallback(self, text):
         """Fallback credential masking for malformed URLs or general text"""
-        import re
-
         if not text:
             return text
 
@@ -1165,7 +1164,7 @@ class DockerImagePuller:
                 layer_json_path = os.path.join(layer_dir, "json")
                 layer_json = {
                     "id": layer_digest,
-                    "created": datetime.utcnow().isoformat() + "Z",
+                    "created": datetime.now(datetime.UTC).isoformat(),
                     "container_config": {
                         "Hostname": "",
                         "Domainname": "",
