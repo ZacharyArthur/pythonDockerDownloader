@@ -313,6 +313,190 @@ class ProxyManager:
         return False
 
 
+class ProgressReporter:
+    """Enhanced progress reporting with Unicode progress bars and ETA calculation"""
+    
+    def __init__(self, total_size=None, description="Download", show_speed=True):
+        """Initialize progress reporter.
+        
+        Args:
+            total_size (int, optional): Total expected size in bytes
+            description (str): Description to show before progress bar
+            show_speed (bool): Whether to show download speed and ETA
+        """
+        self.total_size = total_size
+        self.downloaded = 0
+        self.description = description
+        self.show_speed = show_speed
+        self.start_time = self._get_time()
+        self.last_update = self.start_time
+        self.last_downloaded = 0
+        
+        # Terminal width detection
+        self.terminal_width = self._get_terminal_width()
+        
+    def _get_time(self):
+        """Get current time in seconds"""
+        import time
+        return time.time()
+    
+    def _get_terminal_width(self):
+        """Get terminal width, default to 80 if detection fails"""
+        try:
+            import shutil
+            return shutil.get_terminal_size().columns
+        except:
+            return 80
+    
+    def update(self, bytes_downloaded):
+        """Update progress with new bytes downloaded.
+        
+        Args:
+            bytes_downloaded (int): Additional bytes downloaded since last update
+        """
+        if bytes_downloaded <= 0:
+            return
+            
+        self.downloaded += bytes_downloaded
+        current_time = self._get_time()
+        
+        # Only update display every 0.1 seconds to avoid flickering
+        if current_time - self.last_update < 0.1 and self.downloaded < (self.total_size or float('inf')):
+            return
+            
+        self._display_progress()
+        self.last_update = current_time
+    
+    def _display_progress(self):
+        """Display current progress bar and stats"""
+        # Calculate progress percentage
+        if self.total_size:
+            progress_pct = min(100.0, (self.downloaded / self.total_size) * 100)
+        else:
+            progress_pct = 0
+        
+        # Format downloaded amount
+        downloaded_str = self._format_bytes(self.downloaded)
+        
+        # Build progress bar
+        if self.total_size:
+            total_str = self._format_bytes(self.total_size)
+            size_info = f"{downloaded_str}/{total_str}"
+            progress_bar = self._build_progress_bar(progress_pct)
+        else:
+            size_info = downloaded_str
+            progress_bar = f"[{'█' * 10}] ???%"
+        
+        # Calculate speed and ETA
+        speed_info = ""
+        if self.show_speed:
+            elapsed = self._get_time() - self.start_time
+            if elapsed > 0:
+                speed = self.downloaded / elapsed
+                speed_str = f"{self._format_bytes(speed)}/s"
+                
+                if self.total_size and speed > 0:
+                    remaining = (self.total_size - self.downloaded) / speed
+                    eta_str = self._format_duration(remaining)
+                    speed_info = f" | {speed_str} | ETA: {eta_str}"
+                else:
+                    speed_info = f" | {speed_str}"
+        
+        # Build complete progress line
+        progress_line = f"  {self.description}: {progress_bar} {size_info}{speed_info}"
+        
+        # Truncate to terminal width if needed
+        if len(progress_line) > self.terminal_width:
+            available = self.terminal_width - len(f"  {self.description}: ") - len(size_info) - len(speed_info) - 3
+            if available > 10:  # Minimum bar width
+                progress_bar = self._build_progress_bar(progress_pct, available)
+                progress_line = f"  {self.description}: {progress_bar} {size_info}{speed_info}"
+            else:
+                # Very narrow terminal, show minimal info
+                progress_line = f"  {downloaded_str} {int(progress_pct)}%"
+        
+        # Print with carriage return for overwrite
+        print(f"\r{progress_line}", end="", flush=True)
+    
+    def _build_progress_bar(self, progress_pct, width=30):
+        """Build Unicode progress bar.
+        
+        Args:
+            progress_pct (float): Progress percentage (0-100)
+            width (int): Width of progress bar in characters
+            
+        Returns:
+            str: Formatted progress bar
+        """
+        filled_width = int(width * progress_pct / 100)
+        
+        # Unicode block characters for smooth progress
+        filled_char = '█'
+        empty_char = '░'
+        
+        # Create partial fill for smoother appearance
+        partial_progress = (width * progress_pct / 100) - filled_width
+        if partial_progress > 0.75:
+            partial_char = '▉'
+        elif partial_progress > 0.5:
+            partial_char = '▊'
+        elif partial_progress > 0.25:
+            partial_char = '▌'
+        elif partial_progress > 0:
+            partial_char = '▎'
+        else:
+            partial_char = ''
+        
+        # Build the bar
+        bar_content = (filled_char * filled_width + 
+                      partial_char + 
+                      empty_char * (width - filled_width - len(partial_char)))
+        
+        return f"[{bar_content[:width]}] {progress_pct:5.1f}%"
+    
+    def _format_bytes(self, size):
+        """Format bytes into human readable string.
+        
+        Args:
+            size (int): Size in bytes
+            
+        Returns:
+            str: Formatted size string
+        """
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                if unit == 'B':
+                    return f"{int(size)} {unit}"
+                else:
+                    return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} TB"
+    
+    def _format_duration(self, seconds):
+        """Format duration into human readable string.
+        
+        Args:
+            seconds (float): Duration in seconds
+            
+        Returns:
+            str: Formatted duration string
+        """
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            minutes = int(seconds / 60)
+            secs = int(seconds % 60)
+            return f"{minutes}m{secs:02d}s"
+        else:
+            hours = int(seconds / 3600)
+            minutes = int((seconds % 3600) / 60)
+            return f"{hours}h{minutes:02d}m"
+    
+    def finish(self):
+        """Complete the progress display with a newline"""
+        if self.downloaded > 0:
+            print()  # New line to finish progress display
+
 class DockerImagePuller:
     def __init__(
         self, auth_token=None, proxy_config=None, debug=False, timeout_config=None
@@ -361,7 +545,7 @@ class DockerImagePuller:
         """Stream download with progress tracking and memory efficiency.
         
         Downloads large blobs using streaming to avoid memory issues.
-        Includes progress reporting for large files and timeout handling.
+        Includes enhanced progress reporting with Unicode bars and ETA.
         
         Args:
             response: HTTP response object to stream from
@@ -387,6 +571,12 @@ class DockerImagePuller:
         chunk_size = 65536  # 64KB chunks
         last_activity = time.time()
 
+        # Initialize progress reporter for files > 1MB
+        progress_reporter = None
+        if expected_size and expected_size > 1024 * 1024:  # Over 1MB
+            blob_name = digest[:12] + "..." if len(digest) > 12 else digest
+            progress_reporter = ProgressReporter(expected_size, f"Layer {blob_name}")
+
         try:
             if hasattr(signal, "SIGALRM"):  # Unix systems only
                 signal.signal(signal.SIGALRM, timeout_handler)
@@ -401,23 +591,17 @@ class DockerImagePuller:
                         break
 
                     temp_data.write(chunk)
-                    total_size += len(chunk)
+                    chunk_len = len(chunk)
+                    total_size += chunk_len
                     last_activity = time.time()
 
-                    # Show progress for large downloads
-                    if expected_size and expected_size > 1024 * 1024:  # Over 1MB
-                        progress = (total_size / expected_size) * 100
+                    # Update progress reporter
+                    if progress_reporter:
+                        progress_reporter.update(chunk_len)
+                    elif total_size > 1024 * 1024:  # Fallback for unknown size
+                        # Simple progress for unknown size downloads
                         mb_downloaded = total_size / (1024 * 1024)
-                        mb_total = expected_size / (1024 * 1024)
-                        print(
-                            f"  Downloaded {mb_downloaded:.1f}/{mb_total:.1f} MB ({progress:.1f}%)",
-                            end="\r",
-                        )
-                    elif total_size > 1024 * 1024:  # Over 1MB but no size info
-                        print(
-                            f"  Downloaded {total_size // (1024 * 1024)} MB...",
-                            end="\r",
-                        )
+                        print(f"  Downloaded {mb_downloaded:.1f} MB...", end="\r")
 
                     # Check for stalled downloads (no data for extended period)
                     if time.time() - last_activity > self.chunk_timeout:
@@ -431,8 +615,11 @@ class DockerImagePuller:
                     if hasattr(signal, "SIGALRM"):
                         signal.alarm(0)  # Cancel timeout
 
-            if total_size > 1024 * 1024:
-                print()  # New line after progress
+            # Finish progress reporting
+            if progress_reporter:
+                progress_reporter.finish()
+            elif total_size > 1024 * 1024:
+                print()  # New line after fallback progress
 
             # Read the data back from temp file
             temp_data.close()
@@ -442,9 +629,13 @@ class DockerImagePuller:
             return data
 
         except (TimeoutError, socket.timeout) as e:
+            if progress_reporter:
+                progress_reporter.finish()
             print(f"\nDownload timeout for blob {digest}: {e}")
             return None
         except Exception as e:
+            if progress_reporter:
+                progress_reporter.finish()
             print(f"\nStreaming error for blob {digest}: {e}")
             return None
         finally:
@@ -884,7 +1075,7 @@ class DockerImagePuller:
                     print("[DEBUG] Restored proxy settings")
 
     def create_docker_tar(
-        self, image_name, tag, manifest, config_blob, layers, output_file
+        self, image_name, tag, manifest, config_blob, layers, output_file, progress_reporter=None
     ):
         """Create a Docker-compatible tar file from downloaded components.
         
@@ -898,6 +1089,7 @@ class DockerImagePuller:
             config_blob (bytes): Image configuration blob
             layers (list): List of layer dictionaries with digest, size, data
             output_file (str): Path where to save the tar file
+            progress_reporter (ProgressReporter, optional): Progress reporter for tar creation
             
         Creates:
             A tar file containing:
@@ -916,8 +1108,24 @@ class DockerImagePuller:
 
         full_image_name = f"{namespace}/{repo}"
 
+        # Calculate progress steps
+        total_steps = 4 + len(layers)  # manifest, config, repositories, tar creation + layers
+        current_step = 0
+
+        def update_progress(step_name="Processing"):
+            nonlocal current_step
+            current_step += 1
+            if progress_reporter:
+                # Simulate progress for tar creation
+                progress_reporter.downloaded = int((current_step / total_steps) * 100)
+                progress_reporter.total_size = 100
+                progress_reporter.description = step_name
+                progress_reporter._display_progress()
+
         # Create temporary directory for building tar
         with tempfile.TemporaryDirectory() as tmpdir:
+            update_progress("Preparing config")
+            
             # Save config JSON
             config_digest = manifest["config"]["digest"].replace("sha256:", "")
             config_file = f"{config_digest}.json"
@@ -925,6 +1133,8 @@ class DockerImagePuller:
 
             with open(config_path, "wb") as f:
                 f.write(config_blob)
+
+            update_progress("Processing layers")
 
             # Save layers
             layer_files = []
@@ -981,6 +1191,9 @@ class DockerImagePuller:
                     json.dump(layer_json, f)
 
                 layer_files.append(layer_digest)
+                update_progress(f"Layer {i+1}/{len(layers)}")
+
+            update_progress("Creating manifest")
 
             # Create manifest.json
             manifest_json = [
@@ -1004,6 +1217,8 @@ class DockerImagePuller:
             with open(repositories_path, "w") as f:
                 json.dump(repositories, f)
 
+            update_progress("Building tar file")
+
             # Create the tar file
             with tarfile.open(output_file, "w") as tar:
                 # Add manifest.json
@@ -1024,10 +1239,19 @@ class DockerImagePuller:
                             arcname = os.path.relpath(file_path, tmpdir)
                             tar.add(file_path, arcname=arcname)
 
+            update_progress("Completed")
+
     def pull_image(
         self, image_spec, output_file=None, architecture="amd64", os_type="linux"
     ):
-        """Pull a Docker image and save as tar"""
+        """Pull a Docker image and save as tar with enhanced progress reporting.
+        
+        Args:
+            image_spec (str): Image specification (name:tag)
+            output_file (str, optional): Output tar filename
+            architecture (str): Target architecture
+            os_type (str): Target operating system
+        """
 
         # Parse image specification
         if ":" in image_spec:
@@ -1069,15 +1293,30 @@ class DockerImagePuller:
             print("Failed to download config")
             sys.exit(1)
 
-        # Download layers
+        # Download layers with overall progress tracking
         layers = []
-        total_layers = len(manifest.get("layers", []))
+        layer_list = manifest.get("layers", [])
+        total_layers = len(layer_list)
 
         if total_layers == 0:
             print("Warning: No layers found in manifest")
             print("Manifest structure:", json.dumps(manifest, indent=2)[:500])
+        else:
+            # Calculate total download size for overall progress
+            total_download_size = sum(layer.get("size", 0) for layer in layer_list)
+            
+            print(f"Downloading {total_layers} layers ({self._format_bytes(total_download_size)} total)...")
+            
+            # Create overall progress reporter
+            overall_progress = ProgressReporter(
+                total_download_size if total_download_size > 0 else None,
+                "Overall progress",
+                show_speed=True
+            )
+            
+            downloaded_size = 0
 
-        for i, layer in enumerate(manifest.get("layers", [])):
+        for i, layer in enumerate(layer_list):
             digest = layer.get("digest")
             size = layer.get("size", 0)
 
@@ -1085,10 +1324,11 @@ class DockerImagePuller:
                 print(f"Warning: Layer {i + 1} has no digest, skipping...")
                 continue
 
-            size_str = f"{size:,} bytes" if size else "unknown size"
-            print(
-                f"Downloading layer {i + 1}/{total_layers} ({digest[:12]}... {size_str})"
-            )
+            size_str = f"{self._format_bytes(size)}" if size else "unknown size"
+            layer_desc = f"Layer {i + 1}/{total_layers}"
+            
+            # Show individual layer info
+            print(f"\n{layer_desc} ({digest[:12]}... {size_str})")
 
             blob_data = self.download_blob(full_image_name, digest, token)
 
@@ -1097,23 +1337,323 @@ class DockerImagePuller:
                 print("Continuing with other layers...")
                 continue
 
+            # Update overall progress
+            if total_layers > 0:
+                downloaded_size += len(blob_data)
+                overall_progress.downloaded = downloaded_size
+                overall_progress._display_progress()
+
             layers.append({"digest": digest, "size": size, "data": blob_data})
+
+        # Finish overall progress
+        if total_layers > 0:
+            overall_progress.finish()
 
         if not layers:
             print("Error: No layers were successfully downloaded")
             sys.exit(1)
 
         # Create Docker tar
-        print(f"Creating tar file: {output_file}")
-        self.create_docker_tar(
-            full_image_name, tag, manifest, config_blob, layers, output_file
+        print(f"\nCreating tar file: {output_file}")
+        
+        # Show tar creation progress for large images
+        tar_progress = ProgressReporter(
+            description="Creating tar",
+            show_speed=False
         )
+        
+        self.create_docker_tar(
+            full_image_name, tag, manifest, config_blob, layers, output_file, tar_progress
+        )
+        
+        tar_progress.finish()
 
         # Calculate final size
         file_size = os.path.getsize(output_file)
-        print(f"Successfully created {output_file} (size: {file_size:,} bytes)")
+        print(f"✅ Successfully created {output_file} (size: {self._format_bytes(file_size)})")
         print(f"\nTo load this image, run: docker load -i {output_file}")
 
+    def _format_bytes(self, size):
+        """Format bytes into human readable string (helper method).
+        
+        Args:
+            size (int): Size in bytes
+            
+        Returns:
+            str: Formatted size string
+        """
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                if unit == 'B':
+                    return f"{int(size)} {unit}"
+                else:
+                    return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} TB"
+
+
+class TestSuite:
+    """Self-contained test suite for Docker Image Puller - no external dependencies"""
+    
+    def __init__(self):
+        self.tests_run = 0
+        self.tests_passed = 0
+        self.tests_failed = 0
+        
+    def assert_equal(self, actual, expected, message=""):
+        """Assert that two values are equal"""
+        if actual == expected:
+            return True
+        else:
+            test_name = message or f"Expected {expected}, got {actual}"
+            print(f"  ❌ FAIL: {test_name}")
+            self.tests_failed += 1
+            return False
+    
+    def assert_true(self, condition, message=""):
+        """Assert that condition is true"""
+        if condition:
+            return True
+        else:
+            test_name = message or "Expected condition to be True"
+            print(f"  ❌ FAIL: {test_name}")
+            self.tests_failed += 1
+            return False
+            
+    def assert_false(self, condition, message=""):
+        """Assert that condition is false"""
+        if not condition:
+            return True
+        else:
+            test_name = message or "Expected condition to be False"
+            print(f"  ❌ FAIL: {test_name}")
+            self.tests_failed += 1
+            return False
+    
+    def assert_raises(self, exception_type, func, *args, **kwargs):
+        """Assert that function raises specified exception"""
+        try:
+            func(*args, **kwargs)
+            print(f"  ❌ FAIL: Expected {exception_type.__name__} to be raised")
+            self.tests_failed += 1
+            return False
+        except exception_type:
+            return True
+        except Exception as e:
+            print(f"  ❌ FAIL: Expected {exception_type.__name__}, got {type(e).__name__}: {e}")
+            self.tests_failed += 1
+            return False
+    
+    def run_test(self, test_func, test_name):
+        """Run a single test function"""
+        self.tests_run += 1
+        print(f"\n🧪 Running {test_name}...")
+        
+        try:
+            if test_func():
+                print(f"  ✅ PASS: {test_name}")
+                self.tests_passed += 1
+            else:
+                print(f"  ❌ FAIL: {test_name}")
+                self.tests_failed += 1
+        except Exception as e:
+            print(f"  ❌ ERROR: {test_name} - {type(e).__name__}: {e}")
+            self.tests_failed += 1
+    
+    def test_config_validation(self):
+        """Test Config class validation logic"""
+        print("  Testing Config class validation...")
+        
+        # Test valid configuration
+        try:
+            config = Config(timeout_config={"request_timeout": 30, "download_timeout": 300, "chunk_timeout": 60})
+            success = True
+        except Exception:
+            success = False
+        
+        if not self.assert_true(success, "Valid config should not raise exception"):
+            return False
+            
+        # Test invalid timeout values
+        if not self.assert_raises(ValueError, Config, timeout_config={"request_timeout": -1}):
+            return False
+            
+        if not self.assert_raises(ValueError, Config, timeout_config={"download_timeout": 0}):
+            return False
+            
+        # Test proxy environment variable handling
+        import os
+        old_proxy = os.environ.get('HTTP_PROXY')
+        os.environ['HTTP_PROXY'] = 'http://test-proxy:8080'
+        
+        try:
+            config = Config()
+            proxy_found = config.proxy_config.get('http_proxy') == 'http://test-proxy:8080'
+            if not self.assert_true(proxy_found, "Should pick up HTTP_PROXY from environment"):
+                return False
+        finally:
+            if old_proxy:
+                os.environ['HTTP_PROXY'] = old_proxy
+            else:
+                os.environ.pop('HTTP_PROXY', None)
+                
+        return True
+    
+    def test_proxy_manager_sanitization(self):
+        """Test ProxyManager credential sanitization"""
+        print("  Testing proxy credential sanitization...")
+        
+        config = Config()
+        proxy_manager = ProxyManager(config)
+        
+        # Test URL sanitization
+        test_cases = [
+            ("http://user:pass@proxy.com:8080", "http://proxy.com:8080"),
+            ("https://user:pass@proxy.com", "https://proxy.com"),
+            ("http://proxy.com:8080", "http://proxy.com:8080"),
+            ("", ""),
+            (None, None),
+        ]
+        
+        for input_url, expected in test_cases:
+            result = proxy_manager.sanitize_proxy_url(input_url)
+            if not self.assert_equal(result, expected, f"sanitize_proxy_url({input_url})"):
+                return False
+        
+        # Test fallback credential masking
+        test_text = "Connection to http://user:secret@proxy.com failed"
+        sanitized = proxy_manager._mask_credentials_fallback(test_text)
+        has_credentials = "user" in sanitized or "secret" in sanitized
+        if not self.assert_false(has_credentials, "Credentials should be masked in fallback"):
+            return False
+            
+        return True
+    
+    def test_progress_reporter(self):
+        """Test ProgressReporter functionality"""
+        print("  Testing ProgressReporter...")
+        
+        # Test basic progress tracking
+        reporter = ProgressReporter(total_size=1000, description="Test", show_speed=False)
+        
+        if not self.assert_equal(reporter.downloaded, 0, "Initial downloaded should be 0"):
+            return False
+            
+        if not self.assert_equal(reporter.total_size, 1000, "Total size should be set"):
+            return False
+        
+        # Test byte formatting
+        test_cases = [
+            (512, "512 B"),
+            (1024, "1.0 KB"),
+            (1048576, "1.0 MB"),
+            (1073741824, "1.0 GB"),
+        ]
+        
+        for size, expected in test_cases:
+            result = reporter._format_bytes(size)
+            if not self.assert_equal(result, expected, f"_format_bytes({size})"):
+                return False
+        
+        # Test duration formatting
+        duration_cases = [
+            (30, "30s"),
+            (90, "1m30s"),
+            (3661, "1h01m"),
+        ]
+        
+        for seconds, expected in duration_cases:
+            result = reporter._format_duration(seconds)
+            if not self.assert_equal(result, expected, f"_format_duration({seconds})"):
+                return False
+                
+        return True
+    
+    def test_image_spec_parsing(self):
+        """Test image specification parsing logic"""
+        print("  Testing image specification parsing...")
+        
+        # Mock the parsing logic from pull_image method
+        test_cases = [
+            ("ubuntu", ("ubuntu", "latest")),
+            ("ubuntu:20.04", ("ubuntu", "20.04")),
+            ("library/ubuntu:latest", ("library/ubuntu", "latest")),
+            ("myregistry.com/myorg/myapp:v1.0", ("myregistry.com/myorg/myapp", "v1.0")),
+        ]
+        
+        for image_spec, expected in test_cases:
+            # Simulate the parsing logic
+            if ":" in image_spec:
+                image_name, tag = image_spec.rsplit(":", 1)
+            else:
+                image_name, tag = image_spec, "latest"
+                
+            result = (image_name, tag)
+            if not self.assert_equal(result, expected, f"parse_image_spec({image_spec})"):
+                return False
+                
+        return True
+    
+    def test_timeout_handling(self):
+        """Test timeout configuration handling"""
+        print("  Testing timeout handling...")
+        
+        # Test default timeouts
+        config = Config()
+        if not self.assert_equal(config.request_timeout, 30, "Default request timeout"):
+            return False
+        if not self.assert_equal(config.download_timeout, 300, "Default download timeout"):
+            return False
+        if not self.assert_equal(config.chunk_timeout, 60, "Default chunk timeout"):
+            return False
+            
+        # Test custom timeouts
+        custom_config = Config(timeout_config={
+            "request_timeout": 45,
+            "download_timeout": 600,
+            "chunk_timeout": 120
+        })
+        
+        if not self.assert_equal(custom_config.request_timeout, 45, "Custom request timeout"):
+            return False
+        if not self.assert_equal(custom_config.download_timeout, 600, "Custom download timeout"):
+            return False
+        if not self.assert_equal(custom_config.chunk_timeout, 120, "Custom chunk timeout"):
+            return False
+            
+        return True
+    
+    def run_all_tests(self):
+        """Run all tests and report results"""
+        print("🚀 Running Docker Image Puller Test Suite")
+        print("=" * 50)
+        
+        # List of test methods
+        tests = [
+            (self.test_config_validation, "Config Validation"),
+            (self.test_proxy_manager_sanitization, "Proxy Manager Sanitization"),
+            (self.test_progress_reporter, "Progress Reporter"),
+            (self.test_image_spec_parsing, "Image Specification Parsing"),
+            (self.test_timeout_handling, "Timeout Handling"),
+        ]
+        
+        # Run all tests
+        for test_func, test_name in tests:
+            self.run_test(test_func, test_name)
+        
+        # Print summary
+        print("\n" + "=" * 50)
+        print(f"📊 Test Results Summary")
+        print(f"   Total tests run: {self.tests_run}")
+        print(f"   ✅ Passed: {self.tests_passed}")
+        print(f"   ❌ Failed: {self.tests_failed}")
+        
+        if self.tests_failed == 0:
+            print(f"   🎉 All tests passed!")
+            return True
+        else:
+            print(f"   ⚠️  {self.tests_failed} test(s) failed")
+            return False
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1145,11 +1685,14 @@ Examples:
   
   # Disable SSL verification for corporate proxies
   %(prog)s nginx --proxy https://proxy.company.com:8080 --insecure
+  
+  # Run self-tests
+  %(prog)s --test
         """,
     )
 
     parser.add_argument(
-        "image", help="Docker image to pull (e.g., ubuntu:20.04, alpine, nginx:latest)"
+        "image", nargs='?', help="Docker image to pull (e.g., ubuntu:20.04, alpine, nginx:latest)"
     )
 
     parser.add_argument(
@@ -1231,8 +1774,24 @@ Examples:
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug output for troubleshooting"
     )
+    
+    parser.add_argument(
+        "--test", action="store_true", help="Run self-tests and exit"
+    )
 
     args = parser.parse_args()
+
+    # Run tests if requested
+    if args.test:
+        print("Docker Image Puller - Self Test Mode")
+        print("No external dependencies required - testing internal components\n")
+        test_suite = TestSuite()
+        success = test_suite.run_all_tests()
+        sys.exit(0 if success else 1)
+
+    # Validate that image is provided if not running tests
+    if not args.image:
+        parser.error("image argument is required (unless using --test)")
 
     # Build proxy configuration
     proxy_config = {}
