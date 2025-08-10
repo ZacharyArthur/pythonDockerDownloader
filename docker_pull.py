@@ -268,7 +268,7 @@ class ProxyManager:
                     sanitized += f"#{parsed.fragment}"
 
                 return sanitized
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             return self._mask_credentials_fallback(url)
 
         return url
@@ -974,7 +974,7 @@ class DockerImagePuller:
                                 print(
                                     f"[DEBUG] Will bypass proxy for CDN redirect: {location[:100]}..."
                                 )
-            except Exception:
+            except (HTTPError, URLError, OSError, socket.timeout):
                 # HEAD request failed, continue with GET
                 pass
 
