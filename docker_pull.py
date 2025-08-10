@@ -94,7 +94,7 @@ class Config:
         Returns:
             dict: Validated and normalized proxy configuration
         """
-        # Add proxy configuration from environment if not provided
+        # Merge environment proxy settings
         if not proxy_config.get("http_proxy"):
             proxy_config["http_proxy"] = os.environ.get("HTTP_PROXY") or os.environ.get(
                 "http_proxy"
@@ -264,7 +264,7 @@ class ProxyManager:
         if ":" in auth_string:
             username, password = auth_string.split(":", 1)
         else:
-            print("Warning: Proxy auth should be in format username:password")
+            print("Warning: Proxy authentication must be in format 'username:password'")
             return proxy_url
 
         if parsed.port:
@@ -387,7 +387,7 @@ class ProgressReporter:
         self.downloaded += bytes_downloaded
         current_time = self._get_time()
 
-        # Only update display every 0.1 seconds to avoid flickering
+        # Throttle display updates
         if current_time - self.last_update < 0.1 and self.downloaded < (
             self.total_size or float("inf")
         ):
@@ -443,13 +443,13 @@ class ProgressReporter:
                 - len(speed_info)
                 - 3
             )
-            if available > 10:  # Minimum bar width
+            if available > 10:  # Minimum width required
                 progress_bar = self._build_progress_bar(progress_pct, available)
                 progress_line = (
                     f"  {self.description}: {progress_bar} {size_info}{speed_info}"
                 )
             else:
-                # Very narrow terminal, show minimal info
+                # Minimal display for narrow terminals
                 progress_line = f"  {downloaded_str} {int(progress_pct)}%"
 
         # Print with carriage return for overwrite
@@ -637,11 +637,11 @@ class DockerImagePuller:
                     if progress_reporter:
                         progress_reporter.update(chunk_len)
                     elif total_size > 1024 * 1024:  # Fallback for unknown size
-                        # Simple progress for unknown size downloads
+                        # Fallback progress display
                         mb_downloaded = total_size / (1024 * 1024)
                         print(f"  Downloaded {mb_downloaded:.1f} MB...", end="\r")
 
-                    # Check for stalled downloads (no data for extended period)
+                    # Check for stalled downloads
                     if time.time() - last_activity > self.chunk_timeout:
                         raise TimeoutError(
                             f"Download stalled - no data received for {self.chunk_timeout}s"
@@ -743,9 +743,7 @@ class DockerImagePuller:
                 return data.get("token")
         except (HTTPError, URLError) as e:
             print(f"Error getting auth token: {e}")
-            print(
-                "If behind a corporate proxy, ensure proxy settings are configured correctly"
-            )
+            print("If using a corporate proxy, verify proxy configuration is correct")
             sys.exit(1)
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Error parsing auth token response: {e}")
@@ -824,9 +822,9 @@ class DockerImagePuller:
                                     break
 
                     if not selected_manifest and valid_manifests:
-                        # If still no match but we have valid manifests, inform user
+                        # Fallback to first available platform
                         print(f"\nWarning: No exact match for {os_type}/{architecture}")
-                        print("Falling back to first available platform")
+                        print("Using first available platform as fallback")
                         selected_manifest = valid_manifests[0]
                         platform = selected_manifest.get("platform", {})
                         print(
@@ -914,8 +912,8 @@ class DockerImagePuller:
 
     def convert_schema_v1(self, v1_manifest):
         """Attempt to convert schema v1 manifest to v2-like structure"""
-        # This is a best-effort conversion as v1 is quite different
-        print("Attempting to convert v1 manifest (compatibility mode)...")
+        # Best-effort v1 to v2 conversion
+        print("Converting v1 manifest to v2 format...")
 
         # Extract layer digests from v1 fsLayers
         layers = []
@@ -1060,7 +1058,7 @@ class DockerImagePuller:
                 # Token might not have the right scope, get a new one
                 if self.debug:
                     print("[DEBUG] Got 401, retrying with new token...")
-                print("  Authorization failed, getting new token...")
+                print("  Authorization failed, requesting new token...")
                 new_token = self.get_auth_token(image_name)
                 return self.download_blob(
                     image_name, digest, new_token, retry_with_new_token=False
@@ -1311,17 +1309,17 @@ class DockerImagePuller:
             safe_name = image_name.replace("/", "_")
             output_file = f"{safe_name}_{tag}.tar"
 
-        print(f"Pulling {full_image_name}:{tag}...")
+        print(f"Downloading image: {full_image_name}:{tag}")
 
         # Get auth token
         token = self.get_auth_token(full_image_name)
 
         # Get manifest
-        print("Fetching manifest...")
+        print("Retrieving image manifest...")
         manifest = self.get_manifest(full_image_name, tag, token, architecture, os_type)
 
         # Download config
-        print("Downloading config...")
+        print("Downloading image configuration...")
         config_digest = manifest.get("config", {}).get("digest")
         if not config_digest:
             print("Error: No config digest found in manifest")
@@ -1364,7 +1362,7 @@ class DockerImagePuller:
             size = layer.get("size", 0)
 
             if not digest:
-                print(f"Warning: Layer {i + 1} has no digest, skipping...")
+                print(f"Warning: Layer {i + 1} missing digest, skipping")
                 continue
 
             size_str = f"{self._format_bytes(size)}" if size else "unknown size"
@@ -1377,7 +1375,7 @@ class DockerImagePuller:
 
             if not blob_data:
                 print(f"Failed to download layer {digest}")
-                print("Continuing with other layers...")
+                print("Continuing with remaining layers")
                 continue
 
             # Update overall progress
@@ -1417,7 +1415,7 @@ class DockerImagePuller:
         # Calculate final size
         file_size = os.path.getsize(output_file)
         print(
-            f"✅ Successfully created {output_file} (size: {self._format_bytes(file_size)})"
+            f"Successfully created {output_file} (size: {self._format_bytes(file_size)})"
         )
         print(f"\nTo load this image, run: docker load -i {output_file}")
 
