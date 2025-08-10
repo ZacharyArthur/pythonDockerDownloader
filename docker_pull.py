@@ -54,13 +54,13 @@ class Config:
 
     def _validate_proxy_config(self, proxy_config):
         """Validate and normalize proxy configuration.
-        
+
         Merges provided proxy settings with environment variables.
         Environment variables are used as fallback when not explicitly provided.
-        
+
         Args:
             proxy_config (dict): User-provided proxy configuration
-            
+
         Returns:
             dict: Validated and normalized proxy configuration
         """
@@ -219,11 +219,11 @@ class ProxyManager:
 
     def _add_proxy_auth(self, proxy_url, auth_string):
         """Add authentication credentials to proxy URL.
-        
+
         Args:
             proxy_url (str): Base proxy URL
             auth_string (str): Authentication in format "username:password"
-            
+
         Returns:
             str: Proxy URL with embedded authentication credentials
         """
@@ -314,10 +314,10 @@ class ProxyManager:
 
 class ProgressReporter:
     """Enhanced progress reporting with Unicode progress bars and ETA calculation"""
-    
+
     def __init__(self, total_size=None, description="Download", show_speed=True):
         """Initialize progress reporter.
-        
+
         Args:
             total_size (int, optional): Total expected size in bytes
             description (str): Description to show before progress bar
@@ -330,42 +330,46 @@ class ProgressReporter:
         self.start_time = self._get_time()
         self.last_update = self.start_time
         self.last_downloaded = 0
-        
+
         # Terminal width detection
         self.terminal_width = self._get_terminal_width()
-        
+
     def _get_time(self):
         """Get current time in seconds"""
         import time
+
         return time.time()
-    
+
     def _get_terminal_width(self):
         """Get terminal width, default to 80 if detection fails"""
         try:
             import shutil
+
             return shutil.get_terminal_size().columns
-        except:
+        except (OSError, AttributeError):
             return 80
-    
+
     def update(self, bytes_downloaded):
         """Update progress with new bytes downloaded.
-        
+
         Args:
             bytes_downloaded (int): Additional bytes downloaded since last update
         """
         if bytes_downloaded <= 0:
             return
-            
+
         self.downloaded += bytes_downloaded
         current_time = self._get_time()
-        
+
         # Only update display every 0.1 seconds to avoid flickering
-        if current_time - self.last_update < 0.1 and self.downloaded < (self.total_size or float('inf')):
+        if current_time - self.last_update < 0.1 and self.downloaded < (
+            self.total_size or float("inf")
+        ):
             return
-            
+
         self._display_progress()
         self.last_update = current_time
-    
+
     def _display_progress(self):
         """Display current progress bar and stats"""
         # Calculate progress percentage
@@ -373,10 +377,10 @@ class ProgressReporter:
             progress_pct = min(100.0, (self.downloaded / self.total_size) * 100)
         else:
             progress_pct = 0
-        
+
         # Format downloaded amount
         downloaded_str = self._format_bytes(self.downloaded)
-        
+
         # Build progress bar
         if self.total_size:
             total_str = self._format_bytes(self.total_size)
@@ -385,7 +389,7 @@ class ProgressReporter:
         else:
             size_info = downloaded_str
             progress_bar = f"[{'█' * 10}] ???%"
-        
+
         # Calculate speed and ETA
         speed_info = ""
         if self.show_speed:
@@ -393,90 +397,100 @@ class ProgressReporter:
             if elapsed > 0:
                 speed = self.downloaded / elapsed
                 speed_str = f"{self._format_bytes(speed)}/s"
-                
+
                 if self.total_size and speed > 0:
                     remaining = (self.total_size - self.downloaded) / speed
                     eta_str = self._format_duration(remaining)
                     speed_info = f" | {speed_str} | ETA: {eta_str}"
                 else:
                     speed_info = f" | {speed_str}"
-        
+
         # Build complete progress line
         progress_line = f"  {self.description}: {progress_bar} {size_info}{speed_info}"
-        
+
         # Truncate to terminal width if needed
         if len(progress_line) > self.terminal_width:
-            available = self.terminal_width - len(f"  {self.description}: ") - len(size_info) - len(speed_info) - 3
+            available = (
+                self.terminal_width
+                - len(f"  {self.description}: ")
+                - len(size_info)
+                - len(speed_info)
+                - 3
+            )
             if available > 10:  # Minimum bar width
                 progress_bar = self._build_progress_bar(progress_pct, available)
-                progress_line = f"  {self.description}: {progress_bar} {size_info}{speed_info}"
+                progress_line = (
+                    f"  {self.description}: {progress_bar} {size_info}{speed_info}"
+                )
             else:
                 # Very narrow terminal, show minimal info
                 progress_line = f"  {downloaded_str} {int(progress_pct)}%"
-        
+
         # Print with carriage return for overwrite
         print(f"\r{progress_line}", end="", flush=True)
-    
+
     def _build_progress_bar(self, progress_pct, width=30):
         """Build Unicode progress bar.
-        
+
         Args:
             progress_pct (float): Progress percentage (0-100)
             width (int): Width of progress bar in characters
-            
+
         Returns:
             str: Formatted progress bar
         """
         filled_width = int(width * progress_pct / 100)
-        
+
         # Unicode block characters for smooth progress
-        filled_char = '█'
-        empty_char = '░'
-        
+        filled_char = "█"
+        empty_char = "░"
+
         # Create partial fill for smoother appearance
         partial_progress = (width * progress_pct / 100) - filled_width
         if partial_progress > 0.75:
-            partial_char = '▉'
+            partial_char = "▉"
         elif partial_progress > 0.5:
-            partial_char = '▊'
+            partial_char = "▊"
         elif partial_progress > 0.25:
-            partial_char = '▌'
+            partial_char = "▌"
         elif partial_progress > 0:
-            partial_char = '▎'
+            partial_char = "▎"
         else:
-            partial_char = ''
-        
+            partial_char = ""
+
         # Build the bar
-        bar_content = (filled_char * filled_width + 
-                      partial_char + 
-                      empty_char * (width - filled_width - len(partial_char)))
-        
+        bar_content = (
+            filled_char * filled_width
+            + partial_char
+            + empty_char * (width - filled_width - len(partial_char))
+        )
+
         return f"[{bar_content[:width]}] {progress_pct:5.1f}%"
-    
+
     def _format_bytes(self, size):
         """Format bytes into human readable string.
-        
+
         Args:
             size (int): Size in bytes
-            
+
         Returns:
             str: Formatted size string
         """
-        for unit in ['B', 'KB', 'MB', 'GB']:
+        for unit in ["B", "KB", "MB", "GB"]:
             if size < 1024.0:
-                if unit == 'B':
+                if unit == "B":
                     return f"{int(size)} {unit}"
                 else:
                     return f"{size:.1f} {unit}"
             size /= 1024.0
         return f"{size:.1f} TB"
-    
+
     def _format_duration(self, seconds):
         """Format duration into human readable string.
-        
+
         Args:
             seconds (float): Duration in seconds
-            
+
         Returns:
             str: Formatted duration string
         """
@@ -490,11 +504,12 @@ class ProgressReporter:
             hours = int(seconds / 3600)
             minutes = int((seconds % 3600) / 60)
             return f"{hours}h{minutes:02d}m"
-    
+
     def finish(self):
         """Complete the progress display with a newline"""
         if self.downloaded > 0:
             print()  # New line to finish progress display
+
 
 class DockerImagePuller:
     def __init__(
@@ -542,18 +557,18 @@ class DockerImagePuller:
 
     def _stream_download(self, response, digest, expected_size=None):
         """Stream download with progress tracking and memory efficiency.
-        
+
         Downloads large blobs using streaming to avoid memory issues.
         Includes enhanced progress reporting with Unicode bars and ETA.
-        
+
         Args:
             response: HTTP response object to stream from
             digest (str): Blob digest for identification in error messages
             expected_size (int, optional): Expected download size in bytes
-            
+
         Returns:
             bytes: Downloaded data, or None if download failed
-            
+
         Raises:
             TimeoutError: If download stalls or chunk timeout exceeded
         """
@@ -906,19 +921,19 @@ class DockerImagePuller:
 
     def download_blob(self, image_name, digest, token, retry_with_new_token=True):
         """Download a blob (layer) from Docker registry.
-        
+
         Handles authentication, redirects, and CDN optimization.
         Automatically retries with fresh token on 401 errors.
-        
+
         Args:
             image_name (str): Repository name (e.g., 'library/alpine')
             digest (str): SHA256 digest of the blob to download
             token (str): Bearer token for authentication
             retry_with_new_token (bool): Retry once with fresh token on 401
-            
+
         Returns:
             bytes: Blob data, or None if download failed
-            
+
         Raises:
             Various network and HTTP errors are caught and logged
         """
@@ -1074,13 +1089,20 @@ class DockerImagePuller:
                     print("[DEBUG] Restored proxy settings")
 
     def create_docker_tar(
-        self, image_name, tag, manifest, config_blob, layers, output_file, progress_reporter=None
+        self,
+        image_name,
+        tag,
+        manifest,
+        config_blob,
+        layers,
+        output_file,
+        progress_reporter=None,
     ):
         """Create a Docker-compatible tar file from downloaded components.
-        
+
         Assembles the manifest, config, and layers into a standard Docker tar
         format that can be loaded with 'docker load'.
-        
+
         Args:
             image_name (str): Full image name (e.g., 'library/alpine')
             tag (str): Image tag (e.g., 'latest')
@@ -1089,7 +1111,7 @@ class DockerImagePuller:
             layers (list): List of layer dictionaries with digest, size, data
             output_file (str): Path where to save the tar file
             progress_reporter (ProgressReporter, optional): Progress reporter for tar creation
-            
+
         Creates:
             A tar file containing:
             - manifest.json: Docker format manifest
@@ -1108,7 +1130,9 @@ class DockerImagePuller:
         full_image_name = f"{namespace}/{repo}"
 
         # Calculate progress steps
-        total_steps = 4 + len(layers)  # manifest, config, repositories, tar creation + layers
+        total_steps = 4 + len(
+            layers
+        )  # manifest, config, repositories, tar creation + layers
         current_step = 0
 
         def update_progress(step_name="Processing"):
@@ -1124,7 +1148,7 @@ class DockerImagePuller:
         # Create temporary directory for building tar
         with tempfile.TemporaryDirectory() as tmpdir:
             update_progress("Preparing config")
-            
+
             # Save config JSON
             config_digest = manifest["config"]["digest"].replace("sha256:", "")
             config_file = f"{config_digest}.json"
@@ -1190,7 +1214,7 @@ class DockerImagePuller:
                     json.dump(layer_json, f)
 
                 layer_files.append(layer_digest)
-                update_progress(f"Layer {i+1}/{len(layers)}")
+                update_progress(f"Layer {i + 1}/{len(layers)}")
 
             update_progress("Creating manifest")
 
@@ -1244,7 +1268,7 @@ class DockerImagePuller:
         self, image_spec, output_file=None, architecture="amd64", os_type="linux"
     ):
         """Pull a Docker image and save as tar with enhanced progress reporting.
-        
+
         Args:
             image_spec (str): Image specification (name:tag)
             output_file (str, optional): Output tar filename
@@ -1303,16 +1327,18 @@ class DockerImagePuller:
         else:
             # Calculate total download size for overall progress
             total_download_size = sum(layer.get("size", 0) for layer in layer_list)
-            
-            print(f"Downloading {total_layers} layers ({self._format_bytes(total_download_size)} total)...")
-            
+
+            print(
+                f"Downloading {total_layers} layers ({self._format_bytes(total_download_size)} total)..."
+            )
+
             # Create overall progress reporter
             overall_progress = ProgressReporter(
                 total_download_size if total_download_size > 0 else None,
                 "Overall progress",
-                show_speed=True
+                show_speed=True,
             )
-            
+
             downloaded_size = 0
 
         for i, layer in enumerate(layer_list):
@@ -1325,7 +1351,7 @@ class DockerImagePuller:
 
             size_str = f"{self._format_bytes(size)}" if size else "unknown size"
             layer_desc = f"Layer {i + 1}/{total_layers}"
-            
+
             # Show individual layer info
             print(f"\n{layer_desc} ({digest[:12]}... {size_str})")
 
@@ -1354,36 +1380,41 @@ class DockerImagePuller:
 
         # Create Docker tar
         print(f"\nCreating tar file: {output_file}")
-        
+
         # Show tar creation progress for large images
-        tar_progress = ProgressReporter(
-            description="Creating tar",
-            show_speed=False
-        )
-        
+        tar_progress = ProgressReporter(description="Creating tar", show_speed=False)
+
         self.create_docker_tar(
-            full_image_name, tag, manifest, config_blob, layers, output_file, tar_progress
+            full_image_name,
+            tag,
+            manifest,
+            config_blob,
+            layers,
+            output_file,
+            tar_progress,
         )
-        
+
         tar_progress.finish()
 
         # Calculate final size
         file_size = os.path.getsize(output_file)
-        print(f"✅ Successfully created {output_file} (size: {self._format_bytes(file_size)})")
+        print(
+            f"✅ Successfully created {output_file} (size: {self._format_bytes(file_size)})"
+        )
         print(f"\nTo load this image, run: docker load -i {output_file}")
 
     def _format_bytes(self, size):
         """Format bytes into human readable string (helper method).
-        
+
         Args:
             size (int): Size in bytes
-            
+
         Returns:
             str: Formatted size string
         """
-        for unit in ['B', 'KB', 'MB', 'GB']:
+        for unit in ["B", "KB", "MB", "GB"]:
             if size < 1024.0:
-                if unit == 'B':
+                if unit == "B":
                     return f"{int(size)} {unit}"
                 else:
                     return f"{size:.1f} {unit}"
