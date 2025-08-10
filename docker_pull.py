@@ -1,21 +1,51 @@
 """
 Docker Image Puller - Pure Python CLI for pulling and saving Docker images
-Supports corporate proxies and authentication
-Usage: python docker_pull.py <image:tag> [--output <filename>] [--proxy <proxy>] [--proxy-auth <user:pass>]
+
+A pure Python tool for downloading Docker images from Docker Hub without requiring
+Docker itself. Perfect for air-gapped environments, corporate networks with proxies,
+and transferring images between systems.
+
+Features:
+- No Docker installation required (pure Python, standard library only)
+- Full corporate proxy support with authentication
+- Multi-architecture support (amd64, arm64, etc.)
+- SSL/TLS configuration options
+- Real-time download progress tracking
+- Outputs Docker-compatible tar files
+
+Usage:
+    python docker_pull.py <image:tag> [options]
+
+Examples:
+    python docker_pull.py ubuntu:latest
+    python docker_pull.py nginx:alpine --output my-nginx.tar
+    python docker_pull.py --arch arm64 alpine:latest
+    python docker_pull.py ubuntu:20.04 --proxy http://proxy:8080 --proxy-auth user:pass
+
+Requirements:
+- Python 3.6 or later
+- Internet connection (or corporate network with proxy)
+
+Copyright (c) 2025 ZacharyArthur
+Licensed under the MIT License - see LICENSE file for details
 """
 
 import argparse
 import gzip
 import json
 import os
+import re
+import shutil
+import signal
 import socket
 import ssl
 import sys
 import tarfile
 import tempfile
+import time
+import traceback
 import urllib.request
-import re
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import (
@@ -336,15 +366,11 @@ class ProgressReporter:
 
     def _get_time(self):
         """Get current time in seconds"""
-        import time
-
         return time.time()
 
     def _get_terminal_width(self):
         """Get terminal width, default to 80 if detection fails"""
         try:
-            import shutil
-
             return shutil.get_terminal_size().columns
         except (OSError, AttributeError):
             return 80
@@ -572,8 +598,6 @@ class DockerImagePuller:
         Raises:
             TimeoutError: If download stalls or chunk timeout exceeded
         """
-        import signal
-        import time
 
         # Setup timeout handling for stuck downloads
         def timeout_handler(signum, frame):
@@ -885,8 +909,6 @@ class DockerImagePuller:
             sys.exit(1)
         except Exception as e:
             print(f"Unexpected error getting manifest: {e}")
-            import traceback
-
             traceback.print_exc()
             sys.exit(1)
 
@@ -1064,15 +1086,11 @@ class DockerImagePuller:
         except (URLError, OSError) as e:
             print(f"Network error downloading blob {digest}: {e}")
             if self.debug:
-                import traceback
-
                 traceback.print_exc()
             return None
         except Exception as e:
             print(f"Unexpected error downloading blob {digest}: {e}")
             if self.debug:
-                import traceback
-
                 traceback.print_exc()
             return None
 
@@ -1188,7 +1206,7 @@ class DockerImagePuller:
                 layer_json_path = os.path.join(layer_dir, "json")
                 layer_json = {
                     "id": layer_digest,
-                    "created": datetime.now(datetime.UTC).isoformat(),
+                    "created": datetime.now(timezone.utc).isoformat(),
                     "container_config": {
                         "Hostname": "",
                         "Domainname": "",
