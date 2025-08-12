@@ -6,15 +6,35 @@ Comprehensive tests for all components with no external dependencies.
 Usage: python3 test_docker_pull.py
 """
 
-import sys
+import logging
 import os
+import sys
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(debug=False):
+    """Setup logging configuration for test suite"""
+    level = logging.DEBUG if debug else logging.INFO
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+    logger.setLevel(level)
+
 
 # Import the main classes from docker_pull.py
 try:
-    from docker_pull import Config, ProxyManager, ProgressReporter, DockerImagePuller
+    from docker_pull import Config, DockerImagePuller, ProgressReporter, ProxyManager
 except ImportError:
-    print("Error: Cannot import docker_pull.py")
-    print("   Make sure docker_pull.py is in the same directory")
+    # Setup basic logging for error output
+    logging.basicConfig(level=logging.ERROR, format="%(message)s")
+    logger.error("Error: Cannot import docker_pull.py")
+    logger.error("   Make sure docker_pull.py is in the same directory")
     sys.exit(1)
 
 
@@ -32,7 +52,7 @@ class TestSuite:
             return True
         else:
             test_name = message or f"Expected {expected}, got {actual}"
-            print(f"  FAIL: {test_name}")
+            logger.error(f"  FAIL: {test_name}")
             self.tests_failed += 1
             return False
 
@@ -42,7 +62,7 @@ class TestSuite:
             return True
         else:
             test_name = message or "Expected condition to be True"
-            print(f"  FAIL: {test_name}")
+            logger.error(f"  FAIL: {test_name}")
             self.tests_failed += 1
             return False
 
@@ -52,7 +72,7 @@ class TestSuite:
             return True
         else:
             test_name = message or "Expected condition to be False"
-            print(f"  FAIL: {test_name}")
+            logger.error(f"  FAIL: {test_name}")
             self.tests_failed += 1
             return False
 
@@ -60,13 +80,13 @@ class TestSuite:
         """Assert that function raises specified exception"""
         try:
             func(*args, **kwargs)
-            print(f"  FAIL: Expected {exception_type.__name__} to be raised")
+            logger.error(f"  FAIL: Expected {exception_type.__name__} to be raised")
             self.tests_failed += 1
             return False
         except exception_type:
             return True
         except Exception as e:
-            print(
+            logger.error(
                 f"  FAIL: Expected {exception_type.__name__}, got {type(e).__name__}: {e}"
             )
             self.tests_failed += 1
@@ -75,22 +95,22 @@ class TestSuite:
     def run_test(self, test_func, test_name):
         """Run a single test function"""
         self.tests_run += 1
-        print(f"\nRunning {test_name}...")
+        logger.info(f"\nRunning {test_name}...")
 
         try:
             if test_func():
-                print(f"  PASS: {test_name}")
+                logger.info(f"  PASS: {test_name}")
                 self.tests_passed += 1
             else:
-                print(f"  FAIL: {test_name}")
+                logger.error(f"  FAIL: {test_name}")
                 self.tests_failed += 1
         except Exception as e:
-            print(f"  ERROR: {test_name} - {type(e).__name__}: {e}")
+            logger.error(f"  ERROR: {test_name} - {type(e).__name__}: {e}")
             self.tests_failed += 1
 
     def test_config_validation(self):
         """Test Config class validation logic"""
-        print("  Testing Config class validation...")
+        logger.info("  Testing Config class validation...")
 
         # Test valid configuration
         try:
@@ -142,7 +162,7 @@ class TestSuite:
 
     def test_proxy_manager_sanitization(self):
         """Test ProxyManager credential sanitization"""
-        print("  Testing proxy credential sanitization...")
+        logger.info("  Testing proxy credential sanitization...")
 
         config = Config()
         proxy_manager = ProxyManager(config)
@@ -176,7 +196,7 @@ class TestSuite:
 
     def test_progress_reporter(self):
         """Test ProgressReporter functionality"""
-        print("  Testing ProgressReporter...")
+        logger.info("  Testing ProgressReporter...")
 
         # Test basic progress tracking
         reporter = ProgressReporter(
@@ -220,7 +240,7 @@ class TestSuite:
 
     def test_image_spec_parsing(self):
         """Test image specification parsing logic"""
-        print("  Testing image specification parsing...")
+        logger.info("  Testing image specification parsing...")
 
         # Mock the parsing logic from pull_image method
         test_cases = [
@@ -247,7 +267,7 @@ class TestSuite:
 
     def test_timeout_handling(self):
         """Test timeout configuration handling"""
-        print("  Testing timeout handling...")
+        logger.info("  Testing timeout handling...")
 
         # Test default timeouts
         config = Config()
@@ -286,7 +306,7 @@ class TestSuite:
 
     def test_docker_image_puller_initialization(self):
         """Test DockerImagePuller class initialization"""
-        print("  Testing DockerImagePuller initialization...")
+        logger.info("  Testing DockerImagePuller initialization...")
 
         # Test basic initialization
         puller = DockerImagePuller()
@@ -315,7 +335,7 @@ class TestSuite:
 
     def test_helper_methods(self):
         """Test helper methods in DockerImagePuller"""
-        print("  Testing helper methods...")
+        logger.info("  Testing helper methods...")
 
         puller = DockerImagePuller()
 
@@ -335,10 +355,10 @@ class TestSuite:
 
     def run_all_tests(self):
         """Run all tests and report results"""
-        print("Docker Image Puller Test Suite")
-        print("=" * 60)
-        print("Testing all components with no external dependencies")
-        print("=" * 60)
+        logger.info("Docker Image Puller Test Suite")
+        logger.info("=" * 60)
+        logger.info("Testing all components with no external dependencies")
+        logger.info("=" * 60)
 
         # List of test methods
         tests = [
@@ -359,35 +379,38 @@ class TestSuite:
             self.run_test(test_func, test_name)
 
         # Print summary
-        print("\n" + "=" * 60)
-        print("Test Results Summary")
-        print(f"   Total tests run: {self.tests_run}")
-        print(f"   Passed: {self.tests_passed}")
-        print(f"   Failed: {self.tests_failed}")
+        logger.info("\n" + "=" * 60)
+        logger.info("Test Results Summary")
+        logger.info(f"   Total tests run: {self.tests_run}")
+        logger.info(f"   Passed: {self.tests_passed}")
+        logger.info(f"   Failed: {self.tests_failed}")
 
         if self.tests_failed == 0:
-            print("   All tests passed!")
+            logger.info("   All tests passed!")
             return True
         else:
-            print(f"   {self.tests_failed} test(s) failed")
+            logger.error(f"   {self.tests_failed} test(s) failed")
             return False
 
 
 def main():
     """Run the test suite"""
-    print("Docker Image Puller - Comprehensive Test Suite")
-    print("No external dependencies required - testing internal components\n")
+    # Setup logging first
+    setup_logging()
+
+    logger.info("Docker Image Puller - Comprehensive Test Suite")
+    logger.info("No external dependencies required - testing internal components\n")
 
     test_suite = TestSuite()
     success = test_suite.run_all_tests()
 
-    print("\n" + "=" * 60)
+    logger.info("\n" + "=" * 60)
     if success:
-        print("All tests completed successfully!")
-        print("The Docker Image Puller is working correctly.")
+        logger.info("All tests completed successfully!")
+        logger.info("The Docker Image Puller is working correctly.")
     else:
-        print("Some tests failed. Please review the output above.")
-        print("Consider running with --debug flag for more information.")
+        logger.error("Some tests failed. Please review the output above.")
+        logger.info("Consider running with --debug flag for more information.")
 
     sys.exit(0 if success else 1)
 

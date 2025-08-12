@@ -33,6 +33,7 @@ Licensed under the MIT License - see LICENSE file for details
 import argparse
 import gzip
 import json
+import logging
 import os
 import re
 import shutil
@@ -56,6 +57,35 @@ from urllib.request import (
     install_opener,
     urlopen,
 )
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(level=logging.INFO, debug=False):
+    """Configure logging for the application.
+
+    Args:
+        level (int): Base logging level (INFO, WARNING, ERROR)
+        debug (bool): Enable debug logging if True
+    """
+    # Set debug level if requested
+    if debug:
+        level = logging.DEBUG
+
+    # Configure root logger
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",  # Clean format for CLI tool
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+    # Configure module logger
+    logger.setLevel(level)
+
+    # Suppress urllib3 warnings unless in debug mode
+    if not debug:
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 class Config:
@@ -151,7 +181,7 @@ class ProxyManager:
 
         proxy_handlers = {}
 
-        print("Using proxy configuration:")
+        logger.info("Using proxy configuration:")
 
         http_proxy = self.config.proxy_config.get("http_proxy")
         https_proxy = self.config.proxy_config.get("https_proxy")
@@ -162,7 +192,7 @@ class ProxyManager:
                     http_proxy, self.config.proxy_config["proxy_auth"]
                 )
             proxy_handlers["http"] = http_proxy
-            print(f"  HTTP Proxy: {self.sanitize_proxy_url(http_proxy)}")
+            logger.info(f"  HTTP Proxy: {self.sanitize_proxy_url(http_proxy)}")
 
         if https_proxy:
             if self.config.proxy_config.get("proxy_auth"):
@@ -170,10 +200,10 @@ class ProxyManager:
                     https_proxy, self.config.proxy_config["proxy_auth"]
                 )
             proxy_handlers["https"] = https_proxy
-            print(f"  HTTPS Proxy: {self.sanitize_proxy_url(https_proxy)}")
+            logger.info(f"  HTTPS Proxy: {self.sanitize_proxy_url(https_proxy)}")
 
         if self.config.proxy_config.get("no_proxy"):
-            print(f"  No Proxy: {self.config.proxy_config.get('no_proxy')}")
+            logger.info(f"  No Proxy: {self.config.proxy_config.get('no_proxy')}")
 
         proxy_handler = ProxyHandler(proxy_handlers)
 
@@ -205,12 +235,11 @@ class ProxyManager:
             ctx.verify_mode = ssl.CERT_NONE
             https_handler = urllib.request.HTTPSHandler(context=ctx)
             opener = build_opener(proxy_handler, https_handler, NoAuthRedirectHandler)
-            print("  SSL Verification: Disabled (insecure mode)")
+            logger.info("  SSL Verification: Disabled (insecure mode)")
         else:
             opener = build_opener(proxy_handler, NoAuthRedirectHandler)
 
         install_opener(opener)
-        print()
 
     def _setup_no_proxy(self):
         """Setup opener without proxy"""
@@ -264,7 +293,7 @@ class ProxyManager:
         if ":" in auth_string:
             username, password = auth_string.split(":", 1)
         else:
-            print("Warning: Proxy authentication must be in format 'username:password'")
+            logger.warning("Proxy authentication must be in format 'username:password'")
             return proxy_url
 
         if parsed.port:
@@ -544,12 +573,10 @@ class DockerImagePuller:
         # Create configuration object
         self.config = Config(auth_token, proxy_config, debug, timeout_config)
 
-        # Legacy attributes for backward compatibility
+        # Public API attributes - provide direct access to configuration
         self.registry_url = self.config.registry_url
         self.auth_url = self.config.auth_url
         self.auth_token = self.config.auth_token
-        self.debug = self.config.debug
-        self.headers = {}
         self.proxy_config = self.config.proxy_config
         self.request_timeout = self.config.request_timeout
         self.download_timeout = self.config.download_timeout
@@ -558,7 +585,7 @@ class DockerImagePuller:
         # Create proxy manager
         self.proxy_manager = ProxyManager(self.config)
 
-        # Set up no_proxy_list for legacy compatibility
+        # Set up no_proxy_list for direct access
         self.no_proxy_list = self.proxy_manager.no_proxy_list
 
     def setup_proxy(self):
@@ -669,12 +696,12 @@ class DockerImagePuller:
         except (TimeoutError, socket.timeout) as e:
             if progress_reporter:
                 progress_reporter.finish()
-            print(f"\nDownload timeout for blob {digest}: {e}")
+            logger.error(f"Download timeout for blob {digest}: {e}")
             return None
         except Exception as e:
             if progress_reporter:
                 progress_reporter.finish()
-            print(f"\nStreaming error for blob {digest}: {e}")
+            logger.error(f"Streaming error for blob {digest}: {e}")
             return None
         finally:
             # Cleanup
@@ -694,15 +721,13 @@ class DockerImagePuller:
         """Make HTTP request with proxy handling"""
         req_headers = headers or {}
 
-        if self.debug:
-            print(f"[DEBUG] Request URL: {self.sanitize_debug_output(url)}")
-            print(f"[DEBUG] Headers: {self.sanitize_debug_output(req_headers)}")
+        logger.debug(f"Request URL: {self.sanitize_debug_output(url)}")
+        logger.debug(f"Headers: {self.sanitize_debug_output(req_headers)}")
 
         # Check if we should bypass proxy for this URL
         parsed_url = urlparse(url)
         if self.should_bypass_proxy(parsed_url.hostname):
-            if self.debug:
-                print(f"[DEBUG] Bypassing proxy for {parsed_url.hostname}")
+            logger.debug(f"Bypassing proxy for {parsed_url.hostname}")
             # Temporarily disable proxy for this request
             old_proxies = {}
             for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
@@ -713,8 +738,7 @@ class DockerImagePuller:
             try:
                 req = Request(url, headers=req_headers)
                 response = urlopen(req, timeout=self.request_timeout)
-                if self.debug:
-                    print(f"[DEBUG] Response code: {response.code}")
+                logger.debug(f"Response code: {response.code}")
                 return response
             finally:
                 # Restore proxy settings
@@ -723,8 +747,7 @@ class DockerImagePuller:
         else:
             req = Request(url, headers=req_headers)
             response = urlopen(req, timeout=self.request_timeout)
-            if self.debug:
-                print(f"[DEBUG] Response code: {response.code}")
+            logger.debug(f"Response code: {response.code}")
             return response
 
     def get_auth_token(self, image_name):
@@ -742,14 +765,16 @@ class DockerImagePuller:
                 data = json.loads(response.read())
                 return data.get("token")
         except (HTTPError, URLError) as e:
-            print(f"Error getting auth token: {e}")
-            print("If using a corporate proxy, verify proxy configuration is correct")
+            logger.error(f"Error getting auth token: {e}")
+            logger.info(
+                "If using a corporate proxy, verify proxy configuration is correct"
+            )
             sys.exit(1)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Error parsing auth token response: {e}")
+            logger.error(f"Error parsing auth token response: {e}")
             sys.exit(1)
         except Exception as e:
-            print(f"Unexpected error getting auth token: {e}")
+            logger.error(f"Unexpected error getting auth token: {e}")
             sys.exit(1)
 
     def get_manifest(
@@ -770,7 +795,9 @@ class DockerImagePuller:
 
                 # Check if this is a manifest list (multi-arch)
                 if "manifests" in manifest_data:
-                    print("Multi-architecture image detected. Available platforms:")
+                    logger.info(
+                        "Multi-architecture image detected. Available platforms:"
+                    )
 
                     # List available platforms
                     valid_manifests = []
@@ -786,7 +813,7 @@ class DockerImagePuller:
 
                         valid_manifests.append(m)
                         variant_str = f"-{variant}" if variant else ""
-                        print(f"  - {os}/{arch}{variant_str}")
+                        logger.info(f"  - {os}/{arch}{variant_str}")
 
                     # Find matching manifest for requested architecture
                     selected_manifest = None
@@ -823,20 +850,20 @@ class DockerImagePuller:
 
                     if not selected_manifest and valid_manifests:
                         # Fallback to first available platform
-                        print(f"\nWarning: No exact match for {os_type}/{architecture}")
-                        print("Using first available platform as fallback")
+                        logger.warning(f"No exact match for {os_type}/{architecture}")
+                        logger.info("Using first available platform as fallback")
                         selected_manifest = valid_manifests[0]
                         platform = selected_manifest.get("platform", {})
-                        print(
+                        logger.info(
                             f"Using: {platform.get('os')}/{platform.get('architecture')}"
                         )
 
                     if not selected_manifest:
-                        print("Error: No valid manifest found")
+                        logger.error("No valid manifest found")
                         sys.exit(1)
 
                     platform = selected_manifest.get("platform", {})
-                    print(
+                    logger.info(
                         f"Selected platform: {platform.get('os')}/{platform.get('architecture')}"
                     )
 
@@ -857,7 +884,7 @@ class DockerImagePuller:
                             "mediaType" in specific_manifest
                             and "oci" in specific_manifest.get("mediaType", "")
                         ):
-                            print("  (OCI format image)")
+                            logger.info("  (OCI format image)")
 
                         return specific_manifest
 
@@ -874,46 +901,47 @@ class DockerImagePuller:
                     "schemaVersion" in manifest_data
                     and manifest_data["schemaVersion"] == 1
                 ):
-                    print("Warning: Image uses deprecated manifest schema v1")
-                    print(
+                    logger.warning("Image uses deprecated manifest schema v1")
+                    logger.warning(
                         "This format is not fully supported. Image may not load correctly."
                     )
                     # Try to convert v1 to v2-like structure
                     return self.convert_schema_v1(manifest_data)
 
                 else:
-                    print(
+                    logger.error(
                         f"Unknown manifest format. Keys found: {list(manifest_data.keys())}"
                     )
-                    print(
-                        "Manifest content:", json.dumps(manifest_data, indent=2)[:500]
+                    logger.error(
+                        "Manifest content: %s",
+                        json.dumps(manifest_data, indent=2)[:500],
                     )
                     sys.exit(1)
 
         except HTTPError as e:
             if e.code == 404:
-                print(f"Image {image_name}:{tag} not found")
+                logger.error(f"Image {image_name}:{tag} not found")
             else:
-                print(f"Error getting manifest: {e}")
+                logger.error(f"Error getting manifest: {e}")
                 try:
                     error_body = e.read().decode("utf-8")
                     if error_body:
-                        print(f"Error details: {error_body}")
+                        logger.error("Error details: %s", error_body)
                 except (UnicodeDecodeError, AttributeError):
                     pass
             sys.exit(1)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Error parsing manifest response: {e}")
+            logger.error(f"Error parsing manifest response: {e}")
             sys.exit(1)
         except Exception as e:
-            print(f"Unexpected error getting manifest: {e}")
+            logger.error(f"Unexpected error getting manifest: {e}")
             traceback.print_exc()
             sys.exit(1)
 
     def convert_schema_v1(self, v1_manifest):
         """Attempt to convert schema v1 manifest to v2-like structure"""
         # Best-effort v1 to v2 conversion
-        print("Converting v1 manifest to v2 format...")
+        logger.info("Converting v1 manifest to v2 format...")
 
         # Extract layer digests from v1 fsLayers
         layers = []
@@ -969,8 +997,7 @@ class DockerImagePuller:
             # and auth headers will be stripped by our custom redirect handler
             req = Request(url, headers=headers)
 
-            if self.debug:
-                print(f"[DEBUG] Downloading blob from: {url}")
+            logger.debug(f"Downloading blob from: {url}")
 
             # For blob downloads, temporarily bypass proxy for CDN URLs
             # Save current proxy settings
@@ -995,20 +1022,18 @@ class DockerImagePuller:
                                 or "cloudfront.net" in final_url
                             ):
                                 bypass_proxy_for_cdn = True
-                                if self.debug:
-                                    print(
-                                        f"[DEBUG] Will bypass proxy for CDN URL: {final_url[:100]}..."
-                                    )
+                                logger.debug(
+                                    f"Will bypass proxy for CDN URL: {final_url[:100]}..."
+                                )
                 except HTTPError as e:
                     # If we get a redirect status, extract the Location header
                     if e.code in [301, 302, 303, 307, 308]:
                         location = e.headers.get("Location", "")
                         if "amazonaws.com" in location or "cloudfront.net" in location:
                             bypass_proxy_for_cdn = True
-                            if self.debug:
-                                print(
-                                    f"[DEBUG] Will bypass proxy for CDN redirect: {location[:100]}..."
-                                )
+                            logger.debug(
+                                f"Will bypass proxy for CDN redirect: {location[:100]}..."
+                            )
             except (HTTPError, URLError, OSError, socket.timeout):
                 # HEAD request failed, continue with GET
                 pass
@@ -1036,15 +1061,14 @@ class DockerImagePuller:
                     opener = build_opener()
                 install_opener(opener)
 
-                if self.debug:
-                    print("[DEBUG] Temporarily disabled proxy for CDN download")
+                logger.debug("Temporarily disabled proxy for CDN download")
 
             # Now make the actual download request
             with urlopen(req, timeout=self.download_timeout) as response:
                 # Check if we got redirected
                 final_url = response.geturl()
-                if final_url != url and self.debug:
-                    print(f"[DEBUG] Followed redirect to: {final_url[:100]}...")
+                if final_url != url:
+                    logger.debug(f"Followed redirect to: {final_url[:100]}...")
 
                 # Get content length if available
                 content_length = response.headers.get("Content-Length")
@@ -1056,40 +1080,34 @@ class DockerImagePuller:
         except HTTPError as e:
             if e.code == 401 and retry_with_new_token:
                 # Token might not have the right scope, get a new one
-                if self.debug:
-                    print("[DEBUG] Got 401, retrying with new token...")
-                print("  Authorization failed, requesting new token...")
+                logger.debug("Got 401, retrying with new token...")
+                logger.info("Authorization failed, requesting new token...")
                 new_token = self.get_auth_token(image_name)
                 return self.download_blob(
                     image_name, digest, new_token, retry_with_new_token=False
                 )
 
-            print(f"Error downloading blob {digest}: HTTP {e.code} - {e.reason}")
+            logger.error(f"Error downloading blob {digest}: HTTP {e.code} - {e.reason}")
 
             # Print response body for debugging
             try:
                 error_body = e.read().decode("utf-8")
                 if error_body:
-                    print(f"  Error details: {error_body[:500]}")
+                    logger.error("Error details: %s", error_body[:500])
             except (UnicodeDecodeError, AttributeError):
                 pass
 
-            if self.debug:
-                print(
-                    f"[DEBUG] Request headers were: {self.sanitize_debug_output(headers)}"
-                )
+            logger.debug(f"Request headers were: {self.sanitize_debug_output(headers)}")
 
             return None
 
         except (URLError, OSError) as e:
-            print(f"Network error downloading blob {digest}: {e}")
-            if self.debug:
-                traceback.print_exc()
+            logger.error(f"Network error downloading blob {digest}: {e}")
+            logger.debug("Exception traceback:", exc_info=True)
             return None
         except Exception as e:
-            print(f"Unexpected error downloading blob {digest}: {e}")
-            if self.debug:
-                traceback.print_exc()
+            logger.error(f"Unexpected error downloading blob {digest}: {e}")
+            logger.debug("Exception traceback:", exc_info=True)
             return None
 
         finally:
@@ -1101,8 +1119,7 @@ class DockerImagePuller:
                 # Reinstall the original opener with proxy
                 self.setup_proxy()
 
-                if self.debug:
-                    print("[DEBUG] Restored proxy settings")
+                logger.debug("Restored proxy settings")
 
     def create_docker_tar(
         self,
@@ -1309,27 +1326,27 @@ class DockerImagePuller:
             safe_name = image_name.replace("/", "_")
             output_file = f"{safe_name}_{tag}.tar"
 
-        print(f"Downloading image: {full_image_name}:{tag}")
+        logger.info(f"Downloading image: {full_image_name}:{tag}")
 
         # Get auth token
         token = self.get_auth_token(full_image_name)
 
         # Get manifest
-        print("Retrieving image manifest...")
+        logger.info("Retrieving image manifest...")
         manifest = self.get_manifest(full_image_name, tag, token, architecture, os_type)
 
         # Download config
-        print("Downloading image configuration...")
+        logger.info("Downloading image configuration...")
         config_digest = manifest.get("config", {}).get("digest")
         if not config_digest:
-            print("Error: No config digest found in manifest")
-            print("Manifest structure:", json.dumps(manifest, indent=2)[:500])
+            logger.error("No config digest found in manifest")
+            logger.error("Manifest structure: %s", json.dumps(manifest, indent=2)[:500])
             sys.exit(1)
 
         config_blob = self.download_blob(full_image_name, config_digest, token)
 
         if not config_blob:
-            print("Failed to download config")
+            logger.error("Failed to download config")
             sys.exit(1)
 
         # Download layers with overall progress tracking
@@ -1338,13 +1355,13 @@ class DockerImagePuller:
         total_layers = len(layer_list)
 
         if total_layers == 0:
-            print("Warning: No layers found in manifest")
-            print("Manifest structure:", json.dumps(manifest, indent=2)[:500])
+            logger.warning("No layers found in manifest")
+            logger.error("Manifest structure: %s", json.dumps(manifest, indent=2)[:500])
         else:
             # Calculate total download size for overall progress
             total_download_size = sum(layer.get("size", 0) for layer in layer_list)
 
-            print(
+            logger.info(
                 f"Downloading {total_layers} layers ({self._format_bytes(total_download_size)} total)..."
             )
 
@@ -1362,20 +1379,20 @@ class DockerImagePuller:
             size = layer.get("size", 0)
 
             if not digest:
-                print(f"Warning: Layer {i + 1} missing digest, skipping")
+                logger.warning(f"Layer {i + 1} missing digest, skipping")
                 continue
 
             size_str = f"{self._format_bytes(size)}" if size else "unknown size"
             layer_desc = f"Layer {i + 1}/{total_layers}"
 
             # Show individual layer info
-            print(f"\n{layer_desc} ({digest[:12]}... {size_str})")
+            logger.info(f"{layer_desc} ({digest[:12]}... {size_str})")
 
             blob_data = self.download_blob(full_image_name, digest, token)
 
             if not blob_data:
-                print(f"Failed to download layer {digest}")
-                print("Continuing with remaining layers")
+                logger.error(f"Failed to download layer {digest}")
+                logger.info("Continuing with remaining layers")
                 continue
 
             # Update overall progress
@@ -1391,11 +1408,11 @@ class DockerImagePuller:
             overall_progress.finish()
 
         if not layers:
-            print("Error: No layers were successfully downloaded")
+            logger.error("No layers were successfully downloaded")
             sys.exit(1)
 
         # Create Docker tar
-        print(f"\nCreating tar file: {output_file}")
+        logger.info(f"Creating tar file: {output_file}")
 
         # Show tar creation progress for large images
         tar_progress = ProgressReporter(description="Creating tar", show_speed=False)
@@ -1414,10 +1431,10 @@ class DockerImagePuller:
 
         # Calculate final size
         file_size = os.path.getsize(output_file)
-        print(
+        logger.info(
             f"Successfully created {output_file} (size: {self._format_bytes(file_size)})"
         )
-        print(f"\nTo load this image, run: docker load -i {output_file}")
+        logger.info(f"To load this image, run: docker load -i {output_file}")
 
     def _format_bytes(self, size):
         """Format bytes into human readable string (helper method).
@@ -1555,7 +1572,39 @@ Examples:
         "--debug", action="store_true", help="Enable debug output for troubleshooting"
     )
 
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (INFO level)",
+    )
+
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="Quiet mode - only show errors"
+    )
+
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Set logging level explicitly",
+        default=None,
+    )
+
     args = parser.parse_args()
+
+    # Set up logging based on arguments
+    log_level = logging.WARNING  # Default level
+
+    if args.debug:
+        log_level = logging.DEBUG
+    elif args.verbose:
+        log_level = logging.INFO
+    elif args.quiet:
+        log_level = logging.ERROR
+    elif args.log_level:
+        log_level = getattr(logging, args.log_level)
+
+    setup_logging(level=log_level, debug=args.debug)
 
     # Build proxy configuration
     proxy_config = {}
@@ -1591,13 +1640,13 @@ Examples:
             args.image, args.output, architecture=args.arch, os_type=args.os
         )
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user")
+        logger.info("Operation cancelled by user")
         sys.exit(1)
     except (HTTPError, URLError, OSError) as e:
-        print(f"Network/IO Error: {e}")
+        logger.error(f"Network/IO Error: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         import traceback
 
         traceback.print_exc()
