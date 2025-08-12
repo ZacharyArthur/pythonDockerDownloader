@@ -388,7 +388,6 @@ class ProgressReporter:
         self.show_speed = show_speed
         self.start_time = self._get_time()
         self.last_update = self.start_time
-        self.last_downloaded = 0
 
         # Terminal width detection
         self.terminal_width = self._get_terminal_width()
@@ -627,7 +626,7 @@ class DockerImagePuller:
         """
 
         # Setup timeout handling for stuck downloads
-        def timeout_handler(signum, frame):
+        def timeout_handler(_signum, _frame):
             raise TimeoutError(f"Download chunk timeout after {self.chunk_timeout}s")
 
         # Use temporary file for streaming
@@ -1289,7 +1288,7 @@ class DockerImagePuller:
                 # Add each layer directory
                 for layer_digest in layer_files:
                     layer_dir = os.path.join(tmpdir, layer_digest)
-                    for root, dirs, files in os.walk(layer_dir):
+                    for root, _dirs, files in os.walk(layer_dir):
                         for file in files:
                             file_path = os.path.join(root, file)
                             arcname = os.path.relpath(file_path, tmpdir)
