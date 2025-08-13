@@ -62,6 +62,11 @@ from urllib.request import (
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+
 def setup_logging(level=logging.INFO, debug=False):
     """Configure logging for the application.
 
@@ -86,6 +91,11 @@ def setup_logging(level=logging.INFO, debug=False):
     # Suppress urllib3 warnings unless in debug mode
     if not debug:
         logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+# =============================================================================
+# CONFIGURATION CLASSES
+# =============================================================================
 
 
 class Config:
@@ -163,6 +173,11 @@ class Config:
         if not no_proxy:
             return []
         return [host.strip() for host in no_proxy.split(",")]
+
+
+# =============================================================================
+# SUPPORT CLASSES
+# =============================================================================
 
 
 class ProxyManager:
@@ -563,6 +578,11 @@ class ProgressReporter:
         """Complete the progress display with a newline"""
         if self.downloaded > 0:
             print()  # New line to finish progress display
+
+
+# =============================================================================
+# CORE FUNCTIONALITY
+# =============================================================================
 
 
 class DockerImagePuller:
@@ -1454,37 +1474,42 @@ class DockerImagePuller:
         return f"{size:.1f} TB"
 
 
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Pull Docker images from Docker Hub and save as tar files (with proxy support)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Environment Variables:
-  HTTP_PROXY / http_proxy     - HTTP proxy URL
-  HTTPS_PROXY / https_proxy   - HTTPS proxy URL  
-  NO_PROXY / no_proxy         - Comma-separated list of hosts to bypass proxy
+        Environment Variables:
+        HTTP_PROXY / http_proxy     - HTTP proxy URL
+        HTTPS_PROXY / https_proxy   - HTTPS proxy URL  
+        NO_PROXY / no_proxy         - Comma-separated list of hosts to bypass proxy
 
-Examples:
-  %(prog)s ubuntu:20.04
-  %(prog)s alpine --output alpine-latest.tar
-  
-  # Pull ARM64 image
-  %(prog)s ubuntu:latest --arch arm64
-  
-  # With proxy
-  %(prog)s nginx:latest --proxy http://proxy.company.com:8080
-  
-  # With proxy authentication
-  %(prog)s alpine --proxy http://proxy.company.com:8080 --proxy-auth username:password
-  
-  # Using environment variables
-  export HTTPS_PROXY=http://proxy.company.com:8080
-  export NO_PROXY=localhost,127.0.0.1,.local
-  %(prog)s ubuntu:latest
-  
-  # Disable SSL verification for corporate proxies
-  %(prog)s nginx --proxy https://proxy.company.com:8080 --insecure
-        """,
+        Examples:
+        %(prog)s ubuntu:20.04
+        %(prog)s alpine --output alpine-latest.tar
+        
+        # Pull ARM64 image
+        %(prog)s ubuntu:latest --arch arm64
+        
+        # With proxy
+        %(prog)s nginx:latest --proxy http://proxy.company.com:8080
+        
+        # With proxy authentication
+        %(prog)s alpine --proxy http://proxy.company.com:8080 --proxy-auth username:password
+        
+        # Using environment variables
+        export HTTPS_PROXY=http://proxy.company.com:8080
+        export NO_PROXY=localhost,127.0.0.1,.local
+        %(prog)s ubuntu:latest
+        
+        # Disable SSL verification for corporate proxies
+        %(prog)s nginx --proxy https://proxy.company.com:8080 --insecure
+                """,
     )
 
     parser.add_argument(
@@ -1592,7 +1617,7 @@ Examples:
     args = parser.parse_args()
 
     # Set up logging based on arguments
-    log_level = logging.WARNING  # Default level
+    log_level = logging.INFO  # Default level
 
     if args.debug:
         log_level = logging.DEBUG
