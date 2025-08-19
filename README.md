@@ -1,10 +1,14 @@
-# Docker Image Puller
+# Python Docker Downloader
 
-[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.6+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
+[![GitHub Release](https://img.shields.io/github/v/release/ZacharyArthur/pythonDockerDownloader?include_prereleases)](https://github.com/ZacharyArthur/pythonDockerDownloader/releases)
+[![GitHub Issues](https://img.shields.io/github/issues/ZacharyArthur/pythonDockerDownloader)](https://github.com/ZacharyArthur/pythonDockerDownloader/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/ZacharyArthur/pythonDockerDownloader)](https://github.com/ZacharyArthur/pythonDockerDownloader/stargazers)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-A pure Python CLI tool for downloading Docker images from Docker Hub without requiring Docker itself. Perfect for air-gapped environments, corporate networks with proxies, and transferring images between systems.
+A pure Python CLI tool for downloading Docker images without Docker itself. Single-file architecture with zero runtime dependencies, designed for air-gapped environments, corporate networks with proxy requirements, and seamless image transfers between systems.
 
 ## Features
 
@@ -15,17 +19,34 @@ A pure Python CLI tool for downloading Docker images from Docker Hub without req
 - **Format Support** - Handles Docker v2, OCI, and multi-architecture manifests
 - **CDN Optimization** - Intelligent proxy bypass for faster CDN downloads
 
+## Installation
+
+### Option 1: Direct Download
+```bash
+# Download the script
+curl -O https://raw.githubusercontent.com/ZacharyArthur/pythonDockerDownloader/main/docker_pull.py
+chmod +x docker_pull.py
+```
+
+### Option 2: Git Clone
+```bash
+git clone https://github.com/ZacharyArthur/pythonDockerDownloader.git
+cd pythonDockerDownloader
+```
+
+### Requirements
+- **Python 3.6 or later** - No additional dependencies required
+
 ## Quick Start
 
 ```bash
-# Download the script
-wget https://raw.githubusercontent.com/ZacharyArthur/pythonDockerDownloader/main/docker_pull.py
-chmod +x docker_pull.py
-
 # Pull an image
 python3 docker_pull.py ubuntu:latest
 
-# Load in Docker
+# Pull with custom output name
+python3 docker_pull.py nginx:alpine -o my-nginx.tar
+
+# Load into Docker (if Docker is available)
 docker load -i ubuntu_latest.tar
 ```
 
@@ -124,6 +145,49 @@ python3 docker_pull.py --insecure ubuntu:latest
 - Large images may timeout and retry automatically
 - Check network connectivity and proxy configuration
 
+## Technical Details
+
+### Architecture
+- **Single-file design** - Complete functionality in `docker_pull.py`
+- **Zero runtime dependencies** - Uses only Python 3.6+ standard library
+- **Cross-platform compatibility** - Works on Linux, macOS, and Windows
+
+### Supported Image Formats
+- Docker Registry API v2
+- OCI (Open Container Initiative) images
+- Multi-architecture manifests
+- Private repository authentication
+
+### Code Quality
+- **PEP 8 compliant** - Formatted with Ruff
+- **Type hints** - Enhanced code clarity and IDE support
+- **Comprehensive logging** - Debug and verbose modes available
+- **Error handling** - Graceful failure with helpful messages
+
+## Development
+
+### Running Tests
+```bash
+# Run the test suite
+python3 test_docker_pull.py
+
+# Syntax validation
+python3 -m py_compile docker_pull.py
+```
+
+### Code Quality Checks
+```bash
+# Install development tools (optional)
+pip install ruff vulture
+
+# Linting and formatting
+ruff check .
+ruff format .
+
+# Dead code detection
+vulture .
+```
+
 ## Requirements
 
 - **Python 3.6 or later**
@@ -135,4 +199,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
-This is designed as a single-file, zero-dependency tool. Contributions should maintain Python 3.6+ compatibility and avoid external dependencies.
+This project maintains a single-file, zero-dependency architecture for maximum portability. When contributing:
+
+- Maintain Python 3.6+ compatibility
+- Avoid external dependencies
+- Follow PEP 8 style guidelines
+- Include tests for new functionality
+- Preserve the single-file design
